@@ -47,9 +47,9 @@ PING_TI_CFG = ArticulationCfg(
         joint_pos={
             "base_yaw": 0.0,
             "shoulder_pitch": 0.0,
-            "elbow_pitch": 0.0,
-            "wrist_pitch": 0.0,
-            "wrist_roll": 0.0,
+            "elbow_pitch": -0.0,
+            "wrist_pitch": 1.57,
+            "wrist_roll": -0.0,
             "gripper_moving": 0.0,
         },
         # Set initial joint velocities to zero
