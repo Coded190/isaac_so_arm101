@@ -35,10 +35,10 @@ class ReachPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         value_loss_coef=1.0,
         use_clipped_value_loss=True,
         clip_param=0.2,
-        entropy_coef=0.001,
-        num_learning_epochs=8,
+        entropy_coef=0.005,        # increased from 0.001 — helps prevent premature convergence
+        num_learning_epochs=5,     # reduced from 8 — fewer epochs per batch = more stable
         num_mini_batches=4,
-        learning_rate=1.0e-3,
+        learning_rate=1.0e-4,      # reduced from 1e-3 — this is the primary fix
         schedule="adaptive",
         gamma=0.99,
         lam=0.95,
