@@ -166,7 +166,7 @@ class RewardsCfg:
     # added this wrist flex reward
     wrist_flex_tracking = RewTerm(
         func=joint_pos_target_l2,
-        weight=-0.3,  # tune this relative to position reward
+        weight=-0.05,  # tune this relative to position reward. make sure this is less than end_effector_position_tracking, else the policy will learn to hold the wrist at 'target' while ignoring where the arm is in space.
         params={
             "asset_cfg": SceneEntityCfg("robot", joint_names=["wrist_pitch"]),
             "target": 1.5708,  # target angle in radians — set your desired angle here
@@ -224,3 +224,5 @@ class ReachEnvCfg(ManagerBasedRLEnvCfg):
         self.viewer.eye = (2.5, 2.5, 1.5)
         # simulation settings
         self.sim.dt = 1.0 / 60.0
+
+# can add a ReachEnvCfg_PLAY config to customize the environment during playback

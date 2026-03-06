@@ -123,7 +123,7 @@ class PingTiReachEnvCfg(ReachEnvCfg):
         # override actions
         self.actions.arm_action = mdp.JointPositionActionCfg(
             asset_name="robot",
-            joint_names=[".*"], # maybe exclude the actual moving gripper for reaching tasks?
+            joint_names=["base_yaw", "shoulder_pitch", "elbow_pitch", "wrist_pitch"], # maybe exclude the actual moving gripper for reaching tasks?
             scale=0.5,
             use_default_offset=True,
         )
