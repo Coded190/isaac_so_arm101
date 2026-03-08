@@ -75,6 +75,7 @@ if version.parse(installed_version) < version.parse(RSL_RL_VERSION):
 import gymnasium as gym
 import os
 import torch
+import numpy as np
 from datetime import datetime
 
 import omni
@@ -103,6 +104,207 @@ torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 torch.backends.cudnn.deterministic = False
 torch.backends.cudnn.benchmark = False
+
+
+# ==============================================================================
+# DEBUG: DebugOnPolicyRunner — remove this class when training is stable.
+# To revert: delete this class, then in main() change:
+#   DebugOnPolicyRunner(...)  ->  OnPolicyRunner(...)
+# ==============================================================================
+class DebugOnPolicyRunner(OnPolicyRunner):
+    """OnPolicyRunner with per-iteration diagnostics.
+
+    Printed to stdout every iteration and written to TensorBoard under Debug/.
+
+    What each section tells you
+    ---------------------------
+    Action norm        : should stay ~0.1-2.0. Above 5 = policy saturating outputs.
+    Action delta norm  : should stay ~0.1-0.5. Above 3 = jerky step-to-step commands;
+                         this is the direct cause of action_rate reward exploding.
+    Per-joint range    : watch wrist_roll especially. Range > 3.5 rad = runaway joint.
+    Obs abs max        : should stay <10 with empirical_normalization. Above 50 =
+                         normaliser is failing and the network sees huge inputs.
+    Value abs max      : early warning for crashes. 100-500 = yellow flag.
+                         Above 500 = inf/nan crash within ~50 iterations.
+    Gradient norms     : should stay <=1.0 with max_grad_norm=1.0. Consistently
+                         above 1.0 = gradient clipping is not taking effect.
+    """
+
+    def __init__(self, env, train_cfg, log_dir=None, device="cpu"):
+        super().__init__(env, train_cfg, log_dir=log_dir, device=device)
+        self._prev_actions: torch.Tensor | None = None
+        self._action_norms: list[float] = []
+        self._action_delta_norms: list[float] = []
+        self._joint_pos_mins: list[torch.Tensor] = []
+        self._joint_pos_maxs: list[torch.Tensor] = []
+
+    # ------------------------------------------------------------------
+    # Override collect_rollouts to record per-step diagnostics
+    # ------------------------------------------------------------------
+    def collect_rollouts(self):
+        self._action_norms.clear()
+        self._action_delta_norms.clear()
+        self._joint_pos_mins.clear()
+        self._joint_pos_maxs.clear()
+        self._prev_actions = None
+
+        obs, _ = self.env.get_observations()
+        self.alg.actor_critic.eval()
+
+        for _ in range(self.num_steps_per_env):
+            with torch.inference_mode():
+                actions = self.alg.act(obs)
+
+            # mean action norm across all envs this step
+            self._action_norms.append(actions.norm(dim=-1).mean().item())
+
+            # how much actions change between consecutive steps
+            if self._prev_actions is not None:
+                delta = (actions - self._prev_actions).norm(dim=-1)
+                self._action_delta_norms.append(delta.mean().item())
+            self._prev_actions = actions.clone()
+
+            obs, rewards, dones, infos = self.env.step(actions)
+
+            # joint_pos is the first ObsTerm in the obs vector.
+            # Slice [:, :6] covers all six joints in order:
+            #   base_yaw, shoulder_pitch, elbow_pitch,
+            #   wrist_pitch, wrist_roll, gripper_moving
+            # If your obs order differs, adjust this slice.
+            jp = obs[:, :6]
+            self._joint_pos_mins.append(jp.min(dim=0).values.detach())
+            self._joint_pos_maxs.append(jp.max(dim=0).values.detach())
+
+            self.alg.process_env_step(rewards, dones, infos)
+
+        self.alg.actor_critic.train()
+        self.alg.compute_returns(obs)
+
+    # ------------------------------------------------------------------
+    # Override log to print diagnostics after each PPO update
+    # ------------------------------------------------------------------
+    def log(self, locs: dict, width: int = 80, pad: int = 35) -> str:
+        # run parent log first so standard RSL-RL output is preserved
+        log_str = super().log(locs, width=width, pad=pad)
+
+        it            = locs.get("it", 0)
+        obs_batch     = locs.get("obs_batch")      # (T*N, obs_dim) from PPO update
+        values_batch  = locs.get("values_batch")   # (T*N, 1)
+        actions_batch = locs.get("actions_batch")  # (T*N, act_dim)
+
+        sep = "=" * width
+        print(f"\n{sep}")
+        print(f"  DEBUG  |  Iteration {it}")
+        print(sep)
+
+        # 1. Action norm (per-step mean during rollout)
+        if self._action_norms:
+            a = np.array(self._action_norms)
+            w = "  <-- HIGH, policy saturating" if a.max() > 5.0 else ""
+            print(f"  {'Action norm (mean/env per step)':.<{pad}} "
+                  f"mean={a.mean():.4f}  max={a.max():.4f}  min={a.min():.4f}{w}")
+
+        # 2. Action delta norm (step-to-step change — causes action_rate explosion)
+        if self._action_delta_norms:
+            a = np.array(self._action_delta_norms)
+            w = "  <-- HIGH, action_rate reward will explode" if a.max() > 3.0 else ""
+            print(f"  {'Action delta norm (step-to-step)':.<{pad}} "
+                  f"mean={a.mean():.4f}  max={a.max():.4f}  min={a.min():.4f}{w}")
+
+        # 3. Per-joint position range across entire rollout
+        if self._joint_pos_mins:
+            jmin = torch.stack(self._joint_pos_mins).min(dim=0).values
+            jmax = torch.stack(self._joint_pos_maxs).max(dim=0).values
+            names = [
+                "base_yaw", "shoulder_pitch", "elbow_pitch",
+                "wrist_pitch", "wrist_roll", "gripper_moving"
+            ]
+            print(f"\n  Per-joint position range (obs space, normalised):")
+            for i, name in enumerate(names):
+                lo, hi = jmin[i].item(), jmax[i].item()
+                rng = hi - lo
+                w = "  *** RUNAWAY ***" if rng > 3.5 else ("  * wide *" if rng > 2.0 else "")
+                print(f"    {name:.<22} [{lo:+.3f}, {hi:+.3f}]  range={rng:.3f}{w}")
+
+        # 4. Observation batch stats
+        if obs_batch is not None:
+            omax  = obs_batch.abs().max().item()
+            nan_n = int(torch.isnan(obs_batch).sum())
+            inf_n = int(torch.isinf(obs_batch).sum())
+            w = "  <-- HIGH, normaliser may be failing" if omax > 50 else ""
+            print(f"\n  Observation batch:")
+            print(f"    {'mean':.<{pad}} {obs_batch.mean().item():+.4f}")
+            print(f"    {'std':.<{pad}} {obs_batch.std().item():.4f}")
+            print(f"    {'abs max':.<{pad}} {omax:.4f}{w}")
+            if nan_n: print(f"    *** {nan_n} NaN values in observations! ***")
+            if inf_n: print(f"    *** {inf_n} Inf values in observations! ***")
+
+        # 5. Value function stats — primary early-warning for divergence / crash
+        if values_batch is not None:
+            vmax  = values_batch.abs().max().item()
+            nan_n = int(torch.isnan(values_batch).sum())
+            inf_n = int(torch.isinf(values_batch).sum())
+            if   vmax > 500: w = "  <-- CRITICAL, crash imminent"
+            elif vmax > 100: w = "  <-- WARNING, diverging"
+            else:            w = ""
+            print(f"\n  Value function batch:")
+            print(f"    {'mean':.<{pad}} {values_batch.mean().item():+.4f}")
+            print(f"    {'std':.<{pad}} {values_batch.std().item():.4f}")
+            print(f"    {'abs max':.<{pad}} {vmax:.4f}{w}")
+            if nan_n: print(f"    *** {nan_n} NaN in value estimates! ***")
+            if inf_n: print(f"    *** CRITICAL: {inf_n} Inf in value estimates — crash this iter ***")
+
+        # 6. Actions batch stats (from the PPO minibatch update)
+        if actions_batch is not None:
+            anorm = actions_batch.norm(dim=-1)
+            w = "  <-- HIGH" if anorm.max().item() > 5 else ""
+            print(f"\n  Actions batch (PPO minibatch):")
+            print(f"    {'norm mean':.<{pad}} {anorm.mean().item():.4f}")
+            print(f"    {'norm max':.<{pad}} {anorm.max().item():.4f}{w}")
+            print(f"    {'std':.<{pad}} {actions_batch.std().item():.4f}")
+
+        # 7. Gradient norms — detects exploding gradients before crash
+        ag = self._grad_norm(self.alg.actor_critic.actor)
+        cg = self._grad_norm(self.alg.actor_critic.critic)
+        print(f"\n  Gradient norms (after PPO update):")
+        aw = "  <-- HIGH, clipping may not be working" if ag > 1.0 else ""
+        cw = "  <-- HIGH, value explosion risk"        if cg > 1.0 else ""
+        print(f"    {'actor':.<{pad}} {ag:.4f}{aw}")
+        print(f"    {'critic':.<{pad}} {cg:.4f}{cw}")
+
+        print(sep + "\n")
+
+        # 8. Mirror everything to TensorBoard under Debug/
+        writer = getattr(self, "writer", None)
+        if writer is not None:
+            if self._action_norms:
+                writer.add_scalar("Debug/action_norm_mean",  float(np.mean(self._action_norms)),  it)
+                writer.add_scalar("Debug/action_norm_max",   float(np.max(self._action_norms)),   it)
+            if self._action_delta_norms:
+                writer.add_scalar("Debug/action_delta_mean", float(np.mean(self._action_delta_norms)), it)
+                writer.add_scalar("Debug/action_delta_max",  float(np.max(self._action_delta_norms)),  it)
+            if obs_batch is not None:
+                writer.add_scalar("Debug/obs_abs_max", obs_batch.abs().max().item(), it)
+                writer.add_scalar("Debug/obs_std",     obs_batch.std().item(),       it)
+            if values_batch is not None:
+                writer.add_scalar("Debug/value_abs_max", values_batch.abs().max().item(), it)
+                writer.add_scalar("Debug/value_std",     values_batch.std().item(),       it)
+            writer.add_scalar("Debug/actor_grad_norm",  ag, it)
+            writer.add_scalar("Debug/critic_grad_norm", cg, it)
+
+        return log_str
+
+    @staticmethod
+    def _grad_norm(module: torch.nn.Module) -> float:
+        total = 0.0
+        for p in module.parameters():
+            if p.grad is not None:
+                total += p.grad.data.norm(2).item() ** 2
+        return total ** 0.5
+
+# ==============================================================================
+# END DEBUG
+# ==============================================================================
 
 
 @hydra_task_config(args_cli.task, args_cli.agent)
@@ -187,8 +389,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
 
     # create runner from rsl-rl
+    # DEBUG: DebugOnPolicyRunner swapped in for OnPolicyRunner.
+    # To revert, change DebugOnPolicyRunner back to OnPolicyRunner on the line below.
     if agent_cfg.class_name == "OnPolicyRunner":
-        runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
+        runner = DebugOnPolicyRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
     elif agent_cfg.class_name == "DistillationRunner":
         runner = DistillationRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
     else:
