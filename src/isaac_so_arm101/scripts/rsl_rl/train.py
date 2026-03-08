@@ -139,7 +139,48 @@ class DebugOnPolicyRunner(OnPolicyRunner):
         self._joint_pos_maxs: list[torch.Tensor] = []
 
     # ------------------------------------------------------------------
-    # Override collect_rollouts to record per-step diagnostics
+    # Helper: find actor/critic regardless of RSL-RL version.
+    #
+    # RSL-RL 2.x: self.alg.actor_critic  (combined module with .actor / .critic)
+    # RSL-RL 3.x: self.alg.actor  and  self.alg.critic  (separate modules)
+    # ------------------------------------------------------------------
+    def _get_actor_critic(self) -> tuple[torch.nn.Module | None, torch.nn.Module | None]:
+        alg = self.alg
+
+        # RSL-RL 3.x path — separate attributes on PPO
+        actor  = getattr(alg, "actor",  None)
+        critic = getattr(alg, "critic", None)
+        if isinstance(actor, torch.nn.Module) and isinstance(critic, torch.nn.Module):
+            return actor, critic
+
+        # RSL-RL 2.x path — combined actor_critic with sub-modules
+        ac = getattr(alg, "actor_critic", None)
+        if isinstance(ac, torch.nn.Module):
+            a = getattr(ac, "actor",  ac)   # fall back to whole module if no sub-attr
+            c = getattr(ac, "critic", ac)
+            return a, c
+
+        # Unknown layout — log a one-time warning and skip grad norms
+        if not getattr(self, "_grad_warn_shown", False):
+            print("[DEBUG] Warning: could not locate actor/critic modules on self.alg.")
+            print(f"[DEBUG] self.alg attributes: {[k for k in dir(alg) if not k.startswith('_')]}")
+            self._grad_warn_shown = True
+        return None, None
+
+    @staticmethod
+    def _grad_norm(module: torch.nn.Module | None) -> float:
+        if module is None:
+            return float("nan")
+        total = 0.0
+        for p in module.parameters():
+            if p.grad is not None:
+                total += p.grad.data.norm(2).item() ** 2
+        return total ** 0.5
+
+    # ------------------------------------------------------------------
+    # Override collect_rollouts to record per-step diagnostics.
+    # RSL-RL 3.x calls this from learn(); if the method name ever changes
+    # the per-step buffers will just be empty and the log will say so.
     # ------------------------------------------------------------------
     def collect_rollouts(self):
         self._action_norms.clear()
@@ -149,7 +190,12 @@ class DebugOnPolicyRunner(OnPolicyRunner):
         self._prev_actions = None
 
         obs, _ = self.env.get_observations()
-        self.alg.actor_critic.eval()
+        self.alg.actor_critic.eval() if hasattr(self.alg, "actor_critic") else None
+
+        actor, _ = self._get_actor_critic()
+        policy = getattr(self.alg, "actor_critic", None) or actor
+        if policy is not None:
+            policy.eval()
 
         for _ in range(self.num_steps_per_env):
             with torch.inference_mode():
@@ -166,22 +212,22 @@ class DebugOnPolicyRunner(OnPolicyRunner):
 
             obs, rewards, dones, infos = self.env.step(actions)
 
-            # joint_pos is the first ObsTerm in the obs vector.
-            # Slice [:, :6] covers all six joints in order:
-            #   base_yaw, shoulder_pitch, elbow_pitch,
-            #   wrist_pitch, wrist_roll, gripper_moving
-            # If your obs order differs, adjust this slice.
+            # joint_pos is the first ObsTerm — first 6 dims of obs vector.
+            # Order: base_yaw, shoulder_pitch, elbow_pitch,
+            #        wrist_pitch, wrist_roll, gripper_moving
+            # Adjust the slice if your obs order differs.
             jp = obs[:, :6]
             self._joint_pos_mins.append(jp.min(dim=0).values.detach())
             self._joint_pos_maxs.append(jp.max(dim=0).values.detach())
 
             self.alg.process_env_step(rewards, dones, infos)
 
-        self.alg.actor_critic.train()
+        if policy is not None:
+            policy.train()
         self.alg.compute_returns(obs)
 
     # ------------------------------------------------------------------
-    # Override log to print diagnostics after each PPO update
+    # Override log to print diagnostics after each PPO update.
     # ------------------------------------------------------------------
     def log(self, locs: dict, width: int = 80, pad: int = 35) -> str:
         # run parent log first so standard RSL-RL output is preserved
@@ -203,6 +249,8 @@ class DebugOnPolicyRunner(OnPolicyRunner):
             w = "  <-- HIGH, policy saturating" if a.max() > 5.0 else ""
             print(f"  {'Action norm (mean/env per step)':.<{pad}} "
                   f"mean={a.mean():.4f}  max={a.max():.4f}  min={a.min():.4f}{w}")
+        else:
+            print(f"  {'Action norm':.<{pad}} (no data — collect_rollouts not hooked)")
 
         # 2. Action delta norm (step-to-step change — causes action_rate explosion)
         if self._action_delta_norms:
@@ -217,7 +265,7 @@ class DebugOnPolicyRunner(OnPolicyRunner):
             jmax = torch.stack(self._joint_pos_maxs).max(dim=0).values
             names = [
                 "base_yaw", "shoulder_pitch", "elbow_pitch",
-                "wrist_pitch", "wrist_roll", "gripper_moving"
+                "wrist_pitch", "wrist_roll", "gripper_moving",
             ]
             print(f"\n  Per-joint position range (obs space, normalised):")
             for i, name in enumerate(names):
@@ -238,6 +286,8 @@ class DebugOnPolicyRunner(OnPolicyRunner):
             print(f"    {'abs max':.<{pad}} {omax:.4f}{w}")
             if nan_n: print(f"    *** {nan_n} NaN values in observations! ***")
             if inf_n: print(f"    *** {inf_n} Inf values in observations! ***")
+        else:
+            print(f"\n  Observation batch: (not in locs — key name may differ in this RSL-RL version)")
 
         # 5. Value function stats — primary early-warning for divergence / crash
         if values_batch is not None:
@@ -253,6 +303,12 @@ class DebugOnPolicyRunner(OnPolicyRunner):
             print(f"    {'abs max':.<{pad}} {vmax:.4f}{w}")
             if nan_n: print(f"    *** {nan_n} NaN in value estimates! ***")
             if inf_n: print(f"    *** CRITICAL: {inf_n} Inf in value estimates — crash this iter ***")
+        else:
+            # locs keys vary by version — print them once so we can fix the names
+            if not getattr(self, "_locs_keys_shown", False):
+                print(f"\n  Value function batch: (not in locs)")
+                print(f"  [DEBUG] Available locs keys: {list(locs.keys())}")
+                self._locs_keys_shown = True
 
         # 6. Actions batch stats (from the PPO minibatch update)
         if actions_batch is not None:
@@ -264,13 +320,20 @@ class DebugOnPolicyRunner(OnPolicyRunner):
             print(f"    {'std':.<{pad}} {actions_batch.std().item():.4f}")
 
         # 7. Gradient norms — detects exploding gradients before crash
-        ag = self._grad_norm(self.alg.actor_critic.actor)
-        cg = self._grad_norm(self.alg.actor_critic.critic)
+        actor_mod, critic_mod = self._get_actor_critic()
+        ag = self._grad_norm(actor_mod)
+        cg = self._grad_norm(critic_mod)
         print(f"\n  Gradient norms (after PPO update):")
-        aw = "  <-- HIGH, clipping may not be working" if ag > 1.0 else ""
-        cw = "  <-- HIGH, value explosion risk"        if cg > 1.0 else ""
-        print(f"    {'actor':.<{pad}} {ag:.4f}{aw}")
-        print(f"    {'critic':.<{pad}} {cg:.4f}{cw}")
+        if not np.isnan(ag):
+            aw = "  <-- HIGH, clipping may not be working" if ag > 1.0 else ""
+            print(f"    {'actor':.<{pad}} {ag:.4f}{aw}")
+        else:
+            print(f"    {'actor':.<{pad}} (module not found)")
+        if not np.isnan(cg):
+            cw = "  <-- HIGH, value explosion risk" if cg > 1.0 else ""
+            print(f"    {'critic':.<{pad}} {cg:.4f}{cw}")
+        else:
+            print(f"    {'critic':.<{pad}} (module not found)")
 
         print(sep + "\n")
 
@@ -289,18 +352,10 @@ class DebugOnPolicyRunner(OnPolicyRunner):
             if values_batch is not None:
                 writer.add_scalar("Debug/value_abs_max", values_batch.abs().max().item(), it)
                 writer.add_scalar("Debug/value_std",     values_batch.std().item(),       it)
-            writer.add_scalar("Debug/actor_grad_norm",  ag, it)
-            writer.add_scalar("Debug/critic_grad_norm", cg, it)
+            if not np.isnan(ag): writer.add_scalar("Debug/actor_grad_norm",  ag, it)
+            if not np.isnan(cg): writer.add_scalar("Debug/critic_grad_norm", cg, it)
 
         return log_str
-
-    @staticmethod
-    def _grad_norm(module: torch.nn.Module) -> float:
-        total = 0.0
-        for p in module.parameters():
-            if p.grad is not None:
-                total += p.grad.data.norm(2).item() ** 2
-        return total ** 0.5
 
 # ==============================================================================
 # END DEBUG
