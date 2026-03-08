@@ -13,14 +13,14 @@
   <visual>
     <origin xyz="0 0 0" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="/home/cirp-lab/moore/prefab_robots/PingTi_Arm_v3/PingTi_Arm_5DOF_v4_copy_description/meshes/base_link.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="meshes/base_link.stl" scale="0.001 0.001 0.001"/>
     </geometry>
     <material name="silver"/>
   </visual>
   <collision>
     <origin xyz="0 0 0" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="/home/cirp-lab/moore/prefab_robots/PingTi_Arm_v3/PingTi_Arm_5DOF_v4_copy_description/meshes/base_link.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="meshes/base_link.stl" scale="0.001 0.001 0.001"/>
     </geometry>
   </collision>
 </link>
@@ -34,14 +34,14 @@
   <visual>
     <origin xyz="-0.04035 -0.73013 -0.397948" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="/home/cirp-lab/moore/prefab_robots/PingTi_Arm_v3/PingTi_Arm_5DOF_v4_copy_description/meshes/elbow_link_1.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="meshes/elbow_link_1.stl" scale="0.001 0.001 0.001"/>
     </geometry>
     <material name="silver"/>
   </visual>
   <collision>
     <origin xyz="-0.04035 -0.73013 -0.397948" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="/home/cirp-lab/moore/prefab_robots/PingTi_Arm_v3/PingTi_Arm_5DOF_v4_copy_description/meshes/elbow_link_1.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="meshes/elbow_link_1.stl" scale="0.001 0.001 0.001"/>
     </geometry>
   </collision>
 </link>
@@ -55,14 +55,14 @@
   <visual>
     <origin xyz="-0.024329 -0.46443 -0.400273" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="/home/cirp-lab/moore/prefab_robots/PingTi_Arm_v3/PingTi_Arm_5DOF_v4_copy_description/meshes/STS3215_wrist_pitch_1.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="meshes/STS3215_wrist_pitch_1.stl" scale="0.001 0.001 0.001"/>
     </geometry>
     <material name="silver"/>
   </visual>
   <collision>
     <origin xyz="-0.024329 -0.46443 -0.400273" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="/home/cirp-lab/moore/prefab_robots/PingTi_Arm_v3/PingTi_Arm_5DOF_v4_copy_description/meshes/STS3215_wrist_pitch_1.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="meshes/STS3215_wrist_pitch_1.stl" scale="0.001 0.001 0.001"/>
     </geometry>
   </collision>
 </link>
@@ -76,14 +76,14 @@
   <visual>
     <origin xyz="0.013571 -0.43998 -0.399823" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="/home/cirp-lab/moore/prefab_robots/PingTi_Arm_v3/PingTi_Arm_5DOF_v4_copy_description/meshes/wrist_link_1.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="meshes/wrist_link_1.stl" scale="0.001 0.001 0.001"/>
     </geometry>
     <material name="silver"/>
   </visual>
   <collision>
     <origin xyz="0.013571 -0.43998 -0.399823" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="/home/cirp-lab/moore/prefab_robots/PingTi_Arm_v3/PingTi_Arm_5DOF_v4_copy_description/meshes/wrist_link_1.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="meshes/wrist_link_1.stl" scale="0.001 0.001 0.001"/>
     </geometry>
   </collision>
 </link>
@@ -97,14 +97,14 @@
   <visual>
     <origin xyz="-0.004529 -0.41776 -0.399823" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="/home/cirp-lab/moore/prefab_robots/PingTi_Arm_v3/PingTi_Arm_5DOF_v4_copy_description/meshes/STS3215_wrist_roll_1.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="meshes/STS3215_wrist_roll_1.stl" scale="0.001 0.001 0.001"/>
     </geometry>
     <material name="silver"/>
   </visual>
   <collision>
     <origin xyz="-0.004529 -0.41776 -0.399823" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="/home/cirp-lab/moore/prefab_robots/PingTi_Arm_v3/PingTi_Arm_5DOF_v4_copy_description/meshes/STS3215_wrist_roll_1.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="meshes/STS3215_wrist_roll_1.stl" scale="0.001 0.001 0.001"/>
     </geometry>
   </collision>
 </link>
@@ -118,14 +118,14 @@
   <visual>
     <origin xyz="-0.006169 -0.37926 -0.400273" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="/home/cirp-lab/moore/prefab_robots/PingTi_Arm_v3/PingTi_Arm_5DOF_v4_copy_description/meshes/gripper_mount_1.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="meshes/gripper_mount_1.stl" scale="0.001 0.001 0.001"/>
     </geometry>
     <material name="silver"/>
   </visual>
   <collision>
     <origin xyz="-0.006169 -0.37926 -0.400273" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="/home/cirp-lab/moore/prefab_robots/PingTi_Arm_v3/PingTi_Arm_5DOF_v4_copy_description/meshes/gripper_mount_1.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="meshes/gripper_mount_1.stl" scale="0.001 0.001 0.001"/>
     </geometry>
   </collision>
 </link>
@@ -139,14 +139,14 @@
   <visual>
     <origin xyz="0.010721 -0.36486 -0.402552" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="/home/cirp-lab/moore/prefab_robots/PingTi_Arm_v3/PingTi_Arm_5DOF_v4_copy_description/meshes/STS3215_gripper_1.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="meshes/STS3215_gripper_1.stl" scale="0.001 0.001 0.001"/>
     </geometry>
     <material name="silver"/>
   </visual>
   <collision>
     <origin xyz="0.010721 -0.36486 -0.402552" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="/home/cirp-lab/moore/prefab_robots/PingTi_Arm_v3/PingTi_Arm_5DOF_v4_copy_description/meshes/STS3215_gripper_1.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="meshes/STS3215_gripper_1.stl" scale="0.001 0.001 0.001"/>
     </geometry>
   </collision>
 </link>
@@ -160,14 +160,14 @@
   <visual>
     <origin xyz="-0.024479 -0.36486 -0.382352" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="/home/cirp-lab/moore/prefab_robots/PingTi_Arm_v3/PingTi_Arm_5DOF_v4_copy_description/meshes/moving_gripper_1.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="meshes/moving_gripper_1.stl" scale="0.001 0.001 0.001"/>
     </geometry>
     <material name="silver"/>
   </visual>
   <collision>
     <origin xyz="-0.024479 -0.36486 -0.382352" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="/home/cirp-lab/moore/prefab_robots/PingTi_Arm_v3/PingTi_Arm_5DOF_v4_copy_description/meshes/moving_gripper_1.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="meshes/moving_gripper_1.stl" scale="0.001 0.001 0.001"/>
     </geometry>
   </collision>
 </link>
@@ -181,14 +181,14 @@
   <visual>
     <origin xyz="0.017721 -0.47293 -0.399948" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="/home/cirp-lab/moore/prefab_robots/PingTi_Arm_v3/PingTi_Arm_5DOF_v4_copy_description/meshes/wrist_mount_link_1.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="meshes/wrist_mount_link_1.stl" scale="0.001 0.001 0.001"/>
     </geometry>
     <material name="silver"/>
   </visual>
   <collision>
     <origin xyz="0.017721 -0.47293 -0.399948" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="/home/cirp-lab/moore/prefab_robots/PingTi_Arm_v3/PingTi_Arm_5DOF_v4_copy_description/meshes/wrist_mount_link_1.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="meshes/wrist_mount_link_1.stl" scale="0.001 0.001 0.001"/>
     </geometry>
   </collision>
 </link>
@@ -202,14 +202,14 @@
   <visual>
     <origin xyz="0.0 -0.78468 -0.092798" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="/home/cirp-lab/moore/prefab_robots/PingTi_Arm_v3/PingTi_Arm_5DOF_v4_copy_description/meshes/STS3215_base_yaw_1.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="meshes/STS3215_base_yaw_1.stl" scale="0.001 0.001 0.001"/>
     </geometry>
     <material name="silver"/>
   </visual>
   <collision>
     <origin xyz="0.0 -0.78468 -0.092798" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="/home/cirp-lab/moore/prefab_robots/PingTi_Arm_v3/PingTi_Arm_5DOF_v4_copy_description/meshes/STS3215_base_yaw_1.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="meshes/STS3215_base_yaw_1.stl" scale="0.001 0.001 0.001"/>
     </geometry>
   </collision>
 </link>
@@ -223,14 +223,14 @@
   <visual>
     <origin xyz="0.0 -0.79488 -0.074498" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="/home/cirp-lab/moore/prefab_robots/PingTi_Arm_v3/PingTi_Arm_5DOF_v4_copy_description/meshes/base_yaw_link_1.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="meshes/base_yaw_link_1.stl" scale="0.001 0.001 0.001"/>
     </geometry>
     <material name="silver"/>
   </visual>
   <collision>
     <origin xyz="0.0 -0.79488 -0.074498" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="/home/cirp-lab/moore/prefab_robots/PingTi_Arm_v3/PingTi_Arm_5DOF_v4_copy_description/meshes/base_yaw_link_1.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="meshes/base_yaw_link_1.stl" scale="0.001 0.001 0.001"/>
     </geometry>
   </collision>
 </link>
@@ -244,14 +244,14 @@
   <visual>
     <origin xyz="-0.020911 -0.76183 -0.131098" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="/home/cirp-lab/moore/prefab_robots/PingTi_Arm_v3/PingTi_Arm_5DOF_v4_copy_description/meshes/STS3215_shoulder_pitch_1_1.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="meshes/STS3215_shoulder_pitch_1_1.stl" scale="0.001 0.001 0.001"/>
     </geometry>
     <material name="silver"/>
   </visual>
   <collision>
     <origin xyz="-0.020911 -0.76183 -0.131098" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="/home/cirp-lab/moore/prefab_robots/PingTi_Arm_v3/PingTi_Arm_5DOF_v4_copy_description/meshes/STS3215_shoulder_pitch_1_1.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="meshes/STS3215_shoulder_pitch_1_1.stl" scale="0.001 0.001 0.001"/>
     </geometry>
   </collision>
 </link>
@@ -265,14 +265,14 @@
   <visual>
     <origin xyz="0.020911 -0.76183 -0.131098" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="/home/cirp-lab/moore/prefab_robots/PingTi_Arm_v3/PingTi_Arm_5DOF_v4_copy_description/meshes/STS3215_shoulder_pitch_2_1.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="meshes/STS3215_shoulder_pitch_2_1.stl" scale="0.001 0.001 0.001"/>
     </geometry>
     <material name="silver"/>
   </visual>
   <collision>
     <origin xyz="0.020911 -0.76183 -0.131098" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="/home/cirp-lab/moore/prefab_robots/PingTi_Arm_v3/PingTi_Arm_5DOF_v4_copy_description/meshes/STS3215_shoulder_pitch_2_1.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="meshes/STS3215_shoulder_pitch_2_1.stl" scale="0.001 0.001 0.001"/>
     </geometry>
   </collision>
 </link>
@@ -286,14 +286,14 @@
   <visual>
     <origin xyz="0.041111 -0.76183 -0.166298" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="/home/cirp-lab/moore/prefab_robots/PingTi_Arm_v3/PingTi_Arm_5DOF_v4_copy_description/meshes/shoulder_link_1.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="meshes/shoulder_link_1.stl" scale="0.001 0.001 0.001"/>
     </geometry>
     <material name="silver"/>
   </visual>
   <collision>
     <origin xyz="0.041111 -0.76183 -0.166298" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="/home/cirp-lab/moore/prefab_robots/PingTi_Arm_v3/PingTi_Arm_5DOF_v4_copy_description/meshes/shoulder_link_1.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="meshes/shoulder_link_1.stl" scale="0.001 0.001 0.001"/>
     </geometry>
   </collision>
 </link>
@@ -307,14 +307,14 @@
   <visual>
     <origin xyz="0.020972 -0.76533 -0.397948" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="/home/cirp-lab/moore/prefab_robots/PingTi_Arm_v3/PingTi_Arm_5DOF_v4_copy_description/meshes/STS3215_elbow_pitch_2_1.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="meshes/STS3215_elbow_pitch_2_1.stl" scale="0.001 0.001 0.001"/>
     </geometry>
     <material name="silver"/>
   </visual>
   <collision>
     <origin xyz="0.020972 -0.76533 -0.397948" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="/home/cirp-lab/moore/prefab_robots/PingTi_Arm_v3/PingTi_Arm_5DOF_v4_copy_description/meshes/STS3215_elbow_pitch_2_1.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="meshes/STS3215_elbow_pitch_2_1.stl" scale="0.001 0.001 0.001"/>
     </geometry>
   </collision>
 </link>
@@ -328,14 +328,14 @@
   <visual>
     <origin xyz="-0.02015 -0.76533 -0.397948" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="/home/cirp-lab/moore/prefab_robots/PingTi_Arm_v3/PingTi_Arm_5DOF_v4_copy_description/meshes/STS3215_elbow_pitch_1_1.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="meshes/STS3215_elbow_pitch_1_1.stl" scale="0.001 0.001 0.001"/>
     </geometry>
     <material name="silver"/>
   </visual>
   <collision>
     <origin xyz="-0.02015 -0.76533 -0.397948" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="/home/cirp-lab/moore/prefab_robots/PingTi_Arm_v3/PingTi_Arm_5DOF_v4_copy_description/meshes/STS3215_elbow_pitch_1_1.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="meshes/STS3215_elbow_pitch_1_1.stl" scale="0.001 0.001 0.001"/>
     </geometry>
   </collision>
 </link>
