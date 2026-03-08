@@ -26,7 +26,6 @@ PING_TI_CFG = ArticulationCfg(
     spawn=sim_utils.UrdfFileCfg(
         fix_base=True,
         replace_cylinders_with_capsules=True,
-        # asset_path=f"{TEMPLATE_ASSETS_DATA_DIR}/urdf/PingTi_Arm_v3.urdf",
         asset_path=f"{TEMPLATE_ASSETS_DATA_DIR}/PingTi_Arm_5DOF_v4_copy.urdf", # Updated urdf file I created
         activate_contact_sensors=False, # set as false while waiting for capsule implementation
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
@@ -38,10 +37,12 @@ PING_TI_CFG = ArticulationCfg(
             solver_position_iteration_count=12, # increased from 8
             solver_velocity_iteration_count=1,  # increased from 0 for stability
         ),
-        # joint_drive=sim_utils.UrdfConverterCfg.JointDriveCfg(
-        #     gains=sim_utils.UrdfConverterCfg.JointDriveCfg.PDGainsCfg(stiffness=0, damping=0)
-        # ),
-        joint_drive=None, # replace this with the above commented out block if conversion issue isn't fixed
+        # joint_drive MUST be initialized with zeros so PhysX drive mode is set up.
+        # ImplicitActuatorCfg then overwrites stiffness/damping at runtime.
+        # Do NOT use joint_drive=None — it skips drive setup and actuator gains silently fail.
+        joint_drive=sim_utils.UrdfConverterCfg.JointDriveCfg(
+            gains=sim_utils.UrdfConverterCfg.JointDriveCfg.PDGainsCfg(stiffness=0, damping=0)
+        ),
     ),
     init_state=ArticulationCfg.InitialStateCfg(
         rot=(1.0, 0.0, 0.0, 0.0),
