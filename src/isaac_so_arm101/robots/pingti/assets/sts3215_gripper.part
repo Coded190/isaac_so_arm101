@@ -1,0 +1,13 @@
+{
+    "configuration": "default",
+    "documentId": "cafb9abbd5e1994699c8b820",
+    "documentMicroversion": "d799c1f3b67ad4eb15a95f2a",
+    "elementId": "e27e043451788ae04e631e40",
+    "fullConfiguration": "default",
+    "id": "MZX2Ms726Sr73286D",
+    "isStandardContent": false,
+    "name": "STS3215_gripper <1>",
+    "partId": "JFP",
+    "suppressed": false,
+    "type": "Part"
+}

@@ -114,9 +114,9 @@ class PingTiReachEnvCfg(ReachEnvCfg):
         # switch robot to franka
         self.scene.robot = PING_TI_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
         # override rewards
-        self.rewards.end_effector_position_tracking.params["asset_cfg"].body_names = ["moving_gripper_1"] # link name used for reward
-        self.rewards.end_effector_position_tracking_fine_grained.params["asset_cfg"].body_names = ["moving_gripper_1"]
-        self.rewards.end_effector_orientation_tracking.params["asset_cfg"].body_names = ["moving_gripper_1"]
+        self.rewards.end_effector_position_tracking.params["asset_cfg"].body_names = ["moving_gripper"] # link name used for reward
+        self.rewards.end_effector_position_tracking_fine_grained.params["asset_cfg"].body_names = ["moving_gripper"]
+        self.rewards.end_effector_orientation_tracking.params["asset_cfg"].body_names = ["moving_gripper"]
 
         self.rewards.end_effector_orientation_tracking.weight = 0.0
 
@@ -129,7 +129,7 @@ class PingTiReachEnvCfg(ReachEnvCfg):
         )
         # override command generator body
         # end-effector is along z-direction
-        self.commands.ee_pose.body_name = ["moving_gripper_1"]
+        self.commands.ee_pose.body_name = ["moving_gripper"]
         # self.commands.ee_pose.ranges.pitch = (math.pi, math.pi)
 
 

@@ -1,0 +1,13 @@
+{
+    "configuration": "default",
+    "documentId": "cafb9abbd5e1994699c8b820",
+    "documentMicroversion": "d799c1f3b67ad4eb15a95f2a",
+    "elementId": "e27e043451788ae04e631e40",
+    "fullConfiguration": "default",
+    "id": "MGBR0kxyKKHdHuvb/",
+    "isStandardContent": false,
+    "name": "wrist_link <1>",
+    "partId": "JF3",
+    "suppressed": false,
+    "type": "Part"
+}
