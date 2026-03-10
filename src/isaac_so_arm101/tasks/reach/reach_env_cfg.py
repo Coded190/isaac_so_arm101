@@ -156,7 +156,7 @@ class RewardsCfg:
     )
 
     # action penalty
-    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.0001)
+    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.01) # increased from -0.0001
     joint_vel = RewTerm(
         func=mdp.joint_vel_l2,
         weight=-0.0001,

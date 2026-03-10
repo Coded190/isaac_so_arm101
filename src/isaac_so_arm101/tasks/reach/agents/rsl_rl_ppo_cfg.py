@@ -38,7 +38,7 @@ class ReachPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         entropy_coef=0.005, # increased from 0.001 - helps prevent premature convergence
         num_learning_epochs=5, # decreased from 8 - fewer epochs per batch = more stable
         num_mini_batches=4,
-        learning_rate=1e-4, # decreased from 1e-3
+        learning_rate=5e-5, # decreased from 1e-3
         schedule="adaptive",
         gamma=0.99,
         lam=0.95,
