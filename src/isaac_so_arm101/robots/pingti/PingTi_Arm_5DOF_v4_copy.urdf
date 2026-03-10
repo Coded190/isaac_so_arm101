@@ -13,7 +13,7 @@
     <visual>
       <origin xyz="-0.0109123 0.80818 0.145398" rpy="0 0 -1.5708"/>
       <geometry>
-        <mesh filename="package://pingti_arm_description/assets/sts3215_base_yaw.stl"/>
+        <mesh filename="meshes/sts3215_base_yaw.stl"/>
       </geometry>
       <material name="sts3215_base_yaw_material">
         <color rgba="0.627451 0.627451 0.627451 1"/>
@@ -22,14 +22,14 @@
     <collision>
       <origin xyz="-0.0109123 0.80818 0.145398" rpy="0 0 -1.5708"/>
       <geometry>
-        <mesh filename="package://pingti_arm_description/assets/sts3215_base_yaw.stl"/>
+        <mesh filename="meshes/sts3215_base_yaw.stl"/>
       </geometry>
     </collision>
     <!-- Part base_link -->
     <visual>
       <origin xyz="-0.0109123 0.836841 0.0992979" rpy="1.5708 -0 -0"/>
       <geometry>
-        <mesh filename="package://pingti_arm_description/assets/base_link.stl"/>
+        <mesh filename="meshes/base_link.stl"/>
       </geometry>
       <material name="base_link_material">
         <color rgba="0.627451 0.627451 0.627451 1"/>
@@ -38,7 +38,7 @@
     <collision>
       <origin xyz="-0.0109123 0.836841 0.0992979" rpy="1.5708 -0 -0"/>
       <geometry>
-        <mesh filename="package://pingti_arm_description/assets/base_link.stl"/>
+        <mesh filename="meshes/base_link.stl"/>
       </geometry>
     </collision>
   </link>
@@ -53,7 +53,7 @@
     <visual>
       <origin xyz="-0.0395021 0.00817395 -0.501565" rpy="1.5708 -0 1.5708"/>
       <geometry>
-        <mesh filename="package://pingti_arm_description/assets/base_yaw_link.stl"/>
+        <mesh filename="meshes/base_yaw_link.stl"/>
       </geometry>
       <material name="base_yaw_link_material">
         <color rgba="0.627451 0.627451 0.627451 1"/>
@@ -62,14 +62,14 @@
     <collision>
       <origin xyz="-0.0395021 0.00817395 -0.501565" rpy="1.5708 -0 1.5708"/>
       <geometry>
-        <mesh filename="package://pingti_arm_description/assets/base_yaw_link.stl"/>
+        <mesh filename="meshes/base_yaw_link.stl"/>
       </geometry>
     </collision>
     <!-- Part sts3215_shoulder_pitch_1 -->
     <visual>
       <origin xyz="0.03305 0.0205987 0.0803" rpy="-1.5708 -1.5708 0"/>
       <geometry>
-        <mesh filename="package://pingti_arm_description/assets/sts3215_shoulder_pitch_1.stl"/>
+        <mesh filename="meshes/sts3215_shoulder_pitch_1.stl"/>
       </geometry>
       <material name="sts3215_shoulder_pitch_1_material">
         <color rgba="0.627451 0.627451 0.627451 1"/>
@@ -78,14 +78,14 @@
     <collision>
       <origin xyz="0.03305 0.0205987 0.0803" rpy="-1.5708 -1.5708 0"/>
       <geometry>
-        <mesh filename="package://pingti_arm_description/assets/sts3215_shoulder_pitch_1.stl"/>
+        <mesh filename="meshes/sts3215_shoulder_pitch_1.stl"/>
       </geometry>
     </collision>
     <!-- Part sts3215_shoulder_pitch_2 -->
     <visual>
       <origin xyz="0.03305 -0.0205987 0.0803" rpy="1.5708 -1.5708 0"/>
       <geometry>
-        <mesh filename="package://pingti_arm_description/assets/sts3215_shoulder_pitch_2.stl"/>
+        <mesh filename="meshes/sts3215_shoulder_pitch_2.stl"/>
       </geometry>
       <material name="sts3215_shoulder_pitch_2_material">
         <color rgba="0.627451 0.627451 0.627451 1"/>
@@ -94,7 +94,7 @@
     <collision>
       <origin xyz="0.03305 -0.0205987 0.0803" rpy="1.5708 -1.5708 0"/>
       <geometry>
-        <mesh filename="package://pingti_arm_description/assets/sts3215_shoulder_pitch_2.stl"/>
+        <mesh filename="meshes/sts3215_shoulder_pitch_2.stl"/>
       </geometry>
     </collision>
   </link>
@@ -109,7 +109,7 @@
     <visual>
       <origin xyz="0.0192 0.23165 0.0610856" rpy="0 -0 -0"/>
       <geometry>
-        <mesh filename="package://pingti_arm_description/assets/sts3215_elbow_pitch_2.stl"/>
+        <mesh filename="meshes/sts3215_elbow_pitch_2.stl"/>
       </geometry>
       <material name="sts3215_elbow_pitch_2_material">
         <color rgba="0.627451 0.627451 0.627451 1"/>
@@ -118,14 +118,14 @@
     <collision>
       <origin xyz="0.0192 0.23165 0.0610856" rpy="0 -0 -0"/>
       <geometry>
-        <mesh filename="package://pingti_arm_description/assets/sts3215_elbow_pitch_2.stl"/>
+        <mesh filename="meshes/sts3215_elbow_pitch_2.stl"/>
       </geometry>
     </collision>
     <!-- Part sts3215_elbow_pitch_1 -->
     <visual>
       <origin xyz="0.0192 0.23165 0.0205584" rpy="-3.14159 0 -0"/>
       <geometry>
-        <mesh filename="package://pingti_arm_description/assets/sts3215_elbow_pitch_1.stl"/>
+        <mesh filename="meshes/sts3215_elbow_pitch_1.stl"/>
       </geometry>
       <material name="sts3215_elbow_pitch_1_material">
         <color rgba="0.627451 0.627451 0.627451 1"/>
@@ -134,14 +134,14 @@
     <collision>
       <origin xyz="0.0192 0.23165 0.0205584" rpy="-3.14159 0 -0"/>
       <geometry>
-        <mesh filename="package://pingti_arm_description/assets/sts3215_elbow_pitch_1.stl"/>
+        <mesh filename="meshes/sts3215_elbow_pitch_1.stl"/>
       </geometry>
     </collision>
     <!-- Part shoulder_link -->
     <visual>
       <origin xyz="-0.0808503 -0.0575799 -0.123362" rpy="-1.5708 -1.5708 0"/>
       <geometry>
-        <mesh filename="package://pingti_arm_description/assets/shoulder_link.stl"/>
+        <mesh filename="meshes/shoulder_link.stl"/>
       </geometry>
       <material name="shoulder_link_material">
         <color rgba="0.627451 0.627451 0.627451 1"/>
@@ -150,7 +150,7 @@
     <collision>
       <origin xyz="-0.0808503 -0.0575799 -0.123362" rpy="-1.5708 -1.5708 0"/>
       <geometry>
-        <mesh filename="package://pingti_arm_description/assets/shoulder_link.stl"/>
+        <mesh filename="meshes/shoulder_link.stl"/>
       </geometry>
     </collision>
   </link>
@@ -165,7 +165,7 @@
     <visual>
       <origin xyz="0.357427 -0.0111903 0.0182" rpy="3.14159 -0 3.01926"/>
       <geometry>
-        <mesh filename="package://pingti_arm_description/assets/elbow_link.stl"/>
+        <mesh filename="meshes/elbow_link.stl"/>
       </geometry>
       <material name="elbow_link_material">
         <color rgba="0.627451 0.627451 0.627451 1"/>
@@ -174,14 +174,14 @@
     <collision>
       <origin xyz="0.357427 -0.0111903 0.0182" rpy="3.14159 -0 3.01926"/>
       <geometry>
-        <mesh filename="package://pingti_arm_description/assets/elbow_link.stl"/>
+        <mesh filename="meshes/elbow_link.stl"/>
       </geometry>
     </collision>
     <!-- Part sts3215_wrist_pitch -->
     <visual>
       <origin xyz="0.277128 -0.0320413 0.0337208" rpy="0 -0 -0.122333"/>
       <geometry>
-        <mesh filename="package://pingti_arm_description/assets/sts3215_wrist_pitch.stl"/>
+        <mesh filename="meshes/sts3215_wrist_pitch.stl"/>
       </geometry>
       <material name="sts3215_wrist_pitch_material">
         <color rgba="0.627451 0.627451 0.627451 1"/>
@@ -190,14 +190,14 @@
     <collision>
       <origin xyz="0.277128 -0.0320413 0.0337208" rpy="0 -0 -0.122333"/>
       <geometry>
-        <mesh filename="package://pingti_arm_description/assets/sts3215_wrist_pitch.stl"/>
+        <mesh filename="meshes/sts3215_wrist_pitch.stl"/>
       </geometry>
     </collision>
     <!-- Part wrist_mount_link -->
     <visual>
       <origin xyz="0.212309 -0.0594336 0.0352708" rpy="-0 -0 3.01926"/>
       <geometry>
-        <mesh filename="package://pingti_arm_description/assets/wrist_mount_link.stl"/>
+        <mesh filename="meshes/wrist_mount_link.stl"/>
       </geometry>
       <material name="wrist_mount_link_material">
         <color rgba="0.627451 0.627451 0.627451 1"/>
@@ -206,7 +206,7 @@
     <collision>
       <origin xyz="0.212309 -0.0594336 0.0352708" rpy="-0 -0 3.01926"/>
       <geometry>
-        <mesh filename="package://pingti_arm_description/assets/wrist_mount_link.stl"/>
+        <mesh filename="meshes/wrist_mount_link.stl"/>
       </geometry>
     </collision>
   </link>
@@ -221,7 +221,7 @@
     <visual>
       <origin xyz="0.028 -0 0.0181" rpy="-0 -1.5708 0"/>
       <geometry>
-        <mesh filename="package://pingti_arm_description/assets/wrist_link.stl"/>
+        <mesh filename="meshes/wrist_link.stl"/>
       </geometry>
       <material name="wrist_link_material">
         <color rgba="0.627451 0.627451 0.627451 1"/>
@@ -230,14 +230,14 @@
     <collision>
       <origin xyz="0.028 -0 0.0181" rpy="-0 -1.5708 0"/>
       <geometry>
-        <mesh filename="package://pingti_arm_description/assets/wrist_link.stl"/>
+        <mesh filename="meshes/wrist_link.stl"/>
       </geometry>
     </collision>
     <!-- Part sts3215_wrist_roll -->
     <visual>
       <origin xyz="0.0422157 0 0.0310357" rpy="-0 1.5708 0"/>
       <geometry>
-        <mesh filename="package://pingti_arm_description/assets/sts3215_wrist_roll.stl"/>
+        <mesh filename="meshes/sts3215_wrist_roll.stl"/>
       </geometry>
       <material name="sts3215_wrist_roll_material">
         <color rgba="0.627451 0.627451 0.627451 1"/>
@@ -246,7 +246,7 @@
     <collision>
       <origin xyz="0.0422157 0 0.0310357" rpy="-0 1.5708 0"/>
       <geometry>
-        <mesh filename="package://pingti_arm_description/assets/sts3215_wrist_roll.stl"/>
+        <mesh filename="meshes/sts3215_wrist_roll.stl"/>
       </geometry>
     </collision>
   </link>
@@ -261,7 +261,7 @@
     <visual>
       <origin xyz="0 0 -0" rpy="-3.14159 0 0"/>
       <geometry>
-        <mesh filename="package://pingti_arm_description/assets/gripper_mount.stl"/>
+        <mesh filename="meshes/gripper_mount.stl"/>
       </geometry>
       <material name="gripper_mount_material">
         <color rgba="0.627451 0.627451 0.627451 1"/>
@@ -270,14 +270,14 @@
     <collision>
       <origin xyz="0 0 -0" rpy="-3.14159 0 0"/>
       <geometry>
-        <mesh filename="package://pingti_arm_description/assets/gripper_mount.stl"/>
+        <mesh filename="meshes/gripper_mount.stl"/>
       </geometry>
     </collision>
     <!-- Part sts3215_gripper -->
     <visual>
       <origin xyz="0.0005 -0 -0.0234" rpy="-1.5708 0 0"/>
       <geometry>
-        <mesh filename="package://pingti_arm_description/assets/sts3215_gripper.stl"/>
+        <mesh filename="meshes/sts3215_gripper.stl"/>
       </geometry>
       <material name="sts3215_gripper_material">
         <color rgba="0.627451 0.627451 0.627451 1"/>
@@ -286,7 +286,7 @@
     <collision>
       <origin xyz="0.0005 -0 -0.0234" rpy="-1.5708 0 0"/>
       <geometry>
-        <mesh filename="package://pingti_arm_description/assets/sts3215_gripper.stl"/>
+        <mesh filename="meshes/sts3215_gripper.stl"/>
       </geometry>
     </collision>
   </link>
@@ -301,7 +301,7 @@
     <visual>
       <origin xyz="0.000944164 0.000490603 0.0189" rpy="0 0 -0"/>
       <geometry>
-        <mesh filename="package://pingti_arm_description/assets/moving_gripper.stl"/>
+        <mesh filename="meshes/moving_gripper.stl"/>
       </geometry>
       <material name="moving_gripper_material">
         <color rgba="0.627451 0.627451 0.627451 1"/>
@@ -310,7 +310,7 @@
     <collision>
       <origin xyz="0.000944164 0.000490603 0.0189" rpy="0 0 -0"/>
       <geometry>
-        <mesh filename="package://pingti_arm_description/assets/moving_gripper.stl"/>
+        <mesh filename="meshes/moving_gripper.stl"/>
       </geometry>
     </collision>
   </link>
