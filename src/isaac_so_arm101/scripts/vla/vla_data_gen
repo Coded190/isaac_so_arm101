@@ -7,368 +7,377 @@
 import argparse
 from isaaclab.app import AppLauncher
 
-# Parse arguments and launch Isaac Sim first.
+# Parse arguments and boot Omniverse first
 parser = argparse.ArgumentParser(description="VLA Inference for Isaac Lab.")
 parser.add_argument("--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations.")
 parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to simulate, default is 1.")
 parser.add_argument("--task", type=str, default="None", help="Name of the task.")
-# append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
-# launch omniverse app
 app_launcher = AppLauncher(args_cli)
 
-# Clean up the terminal output (as we did previously)
+# Suppress verbose Omniverse logging
 import carb
 carb.settings.get_settings().set_string("/log/level", "error")
 simulation_app = app_launcher.app
 
-
-"""REST OF IMPORTS GO HERE (After Omniverse is running)"""
+# Standard library and ML imports
 import os
 import cv2
 import torch
-import math
 import numpy as np
 import gymnasium as gym
-from PIL import Image
 
-import isaac_so_arm101.tasks  # Ensures your custom environments are registered
+# Project-specific imports
+import isaac_so_arm101.tasks
 from isaaclab_tasks.utils import parse_env_cfg
 
-# Max position delta per step
-ACTION_CLAMP = 0.15  # meters/step
+# Kinematic limits and timing constants.
+# The action layout for this env is:
+#   action[0:3]  -> relative position delta (meters) for the DifferentialIKController
+#   action[3:6]  -> relative orientation delta (axis-angle, radians) — left at zero here
+#   action[6]    -> absolute gripper joint target (radians), NOT a spray flag
+ACTION_CLAMP = 0.05      # Max Cartesian delta per step (meters). Small → stable IK, larger → faster motion.
+HOVER_OFFSET_Z = 0.10    # Vertical offset above the target for the approach waypoint.
+SPRAY_DURATION = 60      # Sim steps to "spray" at the target (~2 s at 30 Hz).
 
-# Hover height above spray target
-HOVER_OFFSET_Z = 0.10  # meters — small offset since arm workspace is tight
+# Gripper joint targets. Since action[6] is the absolute joint position, we open
+# the gripper during spray (nozzle active) and close it otherwise. Adjust to
+# match your end-effector's mechanical range if different.
+GRIPPER_OPEN = 0.0       # "Spray on" joint position
+GRIPPER_CLOSED = 0.0     # "Spray off" joint position (leave equal if gripper is unused)
 
-# How long to hold the spray position (in simulation steps)
-SPRAY_DURATION = 60  # steps (~2 seconds at 30fps)
+# Path to the palm under which all leaf/trunk prims live.
+PALM_ROOT_PATH = "/World/envs/env_0/Scene/Palm"
 
-"""
-Note: This is hard-coded for the original tree
-# Domain Randomization Ranges
-X_MIN, X_MAX = 0.45, 0.50 # Distance from the trunk
-Y_MIN, Y_MAX = -0.08, 0.08 # Climber twist/side to side margin
-Z_MIN, Z_MAX = 4.95, 5.05 # Climber height margin above the crown
+# Crunched rest configuration the arm snaps to at startup and after every reset.
+# Joint order matches robot.data.joint_names for the SO-ARM101:
+# [base_yaw, shoulder_pitch, elbow_pitch, wrist_pitch, wrist_roll, gripper_moving]
+REST_POSE_VALUES = [
+    0.0,    # base_yaw         (0 = facing forward)
+   -1.8,    # shoulder_pitch   (negative = tucked down)
+    2.8,    # elbow_pitch      (folded up)
+   -1.5,    # wrist_pitch      (curled in)
+    0.0,    # wrist_roll
+    0.0,    # gripper_moving
+]
 
-def get_random_target():
-    # Generates a randomized spray target within the defined tolerance volume.
-    return np.array([
-        np.random.uniform(X_MIN, X_MAX),
-        np.random.uniform(Y_MIN, Y_MAX),
-        np.random.uniform(Z_MIN, Z_MAX)
-    ])
-"""
+# Leaf culling parameters. Only leaves whose world Z is above (crown_z + offset)
+# are candidates for removal. A positive offset culls only the very topmost leaves,
+# preserving the bulk of the canopy for visual realism.
+LEAF_CULL_Z_OFFSET = 0.03   # Start culling 3 cm above the crown centroid
+LEAF_KEEP_RATIO = 0.8       # Keep 80% of the top leaves; only remove the highest 20%
 
-def get_tree_trunk_position(env):
-    """Find the Palm prim and compute a position on the trunk dynamically."""
-    import omni.usd
+# Spray target tuning, expressed as an offset from the computed crown centroid.
+TARGET_OFFSET = np.array([0.0, 0.0, 0.20])
+
+
+def _iter_leaf_prims(stage):
+    """Yield every leaf_* and leaf_b_* prim under the palm root."""
     from pxr import UsdGeom
-    
-    stage = omni.usd.get_context().get_stage()
-    bbox_cache = UsdGeom.BBoxCache(0, ["default", "render"])
-    
-    # Find the Palm prim inside the scene
-    for prim in stage.Traverse():
-        path = str(prim.GetPath())
-        if "Palm" in path and prim.IsA(UsdGeom.Xform):
-            bbox = bbox_cache.ComputeWorldBound(prim)
-            rng = bbox.GetRange()
-            center = (rng.GetMin() + rng.GetMax()) / 2
-            trunk_height = rng.GetMax()[2] - rng.GetMin()[2]
-        
-            z = rng.GetMin()[2] + trunk_height * 0.75
-            
-            pos = np.array([float(center[0]), float(center[1]), float(z)])
-            print(f"[INFO]: Palm bbox height={trunk_height:.2f}m, placing robot at z={z:.2f}")
-            return pos
-    
-    # Fallback to scene root
-    print("[WARNING]: Palm prim not found, falling back to scene root")
-    tree_poses, _ = env.unwrapped.scene["custom_env"].get_world_poses()
-    return tree_poses[0].cpu().numpy()
+    palm = stage.GetPrimAtPath(PALM_ROOT_PATH)
+    if not palm:
+        return
+    for child in palm.GetChildren():
+        name = child.GetName()
+        if name.startswith("leaf_") and UsdGeom.Xformable(child):
+            yield child
 
-# Relative Offsets
-OFFSET_X_MIN, OFFSET_X_MAX = -0.12, -0.05  # Stop 5cm to 15cm in front of the tree
-OFFSET_Y_MIN, OFFSET_Y_MAX = -0.04, 0.04   # Slight left/right variation
-OFFSET_Z_MIN, OFFSET_Z_MAX = 0.15, 0.25    # Spray near the base or slightly up the trunk
 
-def get_dynamic_target(tree_pos):
-    """Generates a target relative to the tree's newly randomized location."""
-    return np.array([
-        tree_pos[0] + np.random.uniform(OFFSET_X_MIN, OFFSET_X_MAX),
-        tree_pos[1] + np.random.uniform(OFFSET_Y_MIN, OFFSET_Y_MAX),
-        tree_pos[2] + np.random.uniform(OFFSET_Z_MIN, OFFSET_Z_MAX)
-    ])
-    
-# How far from the trunk center the robot base should sit
-ROBOT_STANDOFF = 0.40  # meters — adjust so base clears the bark
+def _leaf_world_positions(stage):
+    """Return (prim, world_xyz) tuples for every leaf with a valid transform."""
+    from pxr import UsdGeom
+    out = []
+    for prim in _iter_leaf_prims(stage):
+        xf = UsdGeom.Xformable(prim)
+        try:
+            wp = xf.ComputeLocalToWorldTransform(0).ExtractTranslation()
+            out.append((prim, np.array([wp[0], wp[1], wp[2]], dtype=np.float64)))
+        except Exception:
+            continue
+    return out
 
-def reposition_robot(env, trunk_pos):
-    """Teleport robot base near trunk, facing toward it."""
+
+def get_crown_centroid(stage):
+    """
+    Return the centroid of the palm's leaf cluster in world coordinates.
+    This is the geometric center of the crown, used as the base spray target.
+    """
+    leaves = _leaf_world_positions(stage)
+    if not leaves:
+        print("[WARN] No leaves found under palm — using fallback crown centroid.")
+        return np.array([0.0, 0.0, 5.0])
+    positions = np.stack([p for _, p in leaves], axis=0)
+    return positions.mean(axis=0)
+
+
+def remove_top_leaves(stage, crown_z, z_threshold_offset=LEAF_CULL_Z_OFFSET, keep_ratio=LEAF_KEEP_RATIO):
+    """
+    Deactivate the topmost leaf prims to clear an approach corridor above the crown.
+    Leaves below (crown_z + z_threshold_offset) are always preserved; above that,
+    the highest-Z leaves are culled first until (1 - keep_ratio) of the candidate
+    set has been removed.
+    """
+    cull_z = crown_z + z_threshold_offset
+    leaves = _leaf_world_positions(stage)
+
+    top_leaves = [(prim, pos[2]) for prim, pos in leaves if pos[2] > cull_z]
+    top_leaves.sort(key=lambda x: -x[1])
+
+    n_remove = int(len(top_leaves) * (1.0 - keep_ratio))
+    for prim, _ in top_leaves[:n_remove]:
+        prim.SetActive(False)
+
+    print(f"[INFO] Culled {n_remove}/{len(top_leaves)} top leaves above z={cull_z:.3f} "
+          f"(total leaves seen: {len(leaves)})")
+
+
+def spawn_target_marker(stage, position_world, radius=0.04, color=(1.0, 0.0, 0.0)):
+    """
+    Place a small red sphere at the given world coordinate to visualize the spray
+    target. Non-colliding, non-physical — pure visual aid. Idempotent.
+    """
+    from pxr import UsdGeom, Gf, Sdf
+    path = "/World/debug_target_marker"
+    if stage.GetPrimAtPath(path):
+        stage.RemovePrim(path)
+
+    sphere = UsdGeom.Sphere.Define(stage, Sdf.Path(path))
+    sphere.GetRadiusAttr().Set(radius)
+    sphere.AddTranslateOp().Set(Gf.Vec3d(float(position_world[0]),
+                                          float(position_world[1]),
+                                          float(position_world[2])))
+    sphere.GetDisplayColorAttr().Set([Gf.Vec3f(*color)])
+    print(f"[DEBUG] Target marker at {np.asarray(position_world).round(3)}")
+
+
+def set_rest_pose(env, rest_pose_tensor):
+    """Snap the arm to its rest configuration with zero joint velocity."""
     robot = env.unwrapped.scene["robot"]
-    
-    robot_pos = trunk_pos.copy()
-    robot_pos[0] += ROBOT_STANDOFF
-    
-    # Compute yaw angle FROM robot TO trunk center
-    dx = trunk_pos[0] - robot_pos[0]
-    dy = trunk_pos[1] - robot_pos[1]
-    yaw = math.atan2(dy, dx)
-    
-    # Convert yaw to quaternion (rotation around Z axis)
-    # (w, x, y, z)
-    quat = [math.cos(yaw / 2), 0.0, 0.0, math.sin(yaw / 2)]
-    
-    print(f"[REPOSITION] trunk={trunk_pos.round(3)} | robot={robot_pos.round(3)} | yaw={math.degrees(yaw):.1f}° | quat={[round(q,3) for q in quat]}")
+    zero_vel = torch.zeros_like(rest_pose_tensor)
+    robot.write_joint_state_to_sim(rest_pose_tensor, zero_vel)
 
-    
-    pos_tensor = torch.tensor(robot_pos, dtype=torch.float32, device=env.unwrapped.device).unsqueeze(0)
-    quat_tensor = torch.tensor([quat], dtype=torch.float32, device=env.unwrapped.device)
-    
-    robot.write_root_pose_to_sim(torch.cat([pos_tensor, quat_tensor], dim=-1))
 
-"""
-Note: Non-randomized spray target value (place holder)
-# Spray target: push slightly toward palm (X=0.56) and a bit higher into the canopy
-# Arm natural hover is ~[0.5, 0.03, 5.07], so this is a small reachable adjustment
-# SPRAY_TARGET = np.array([0.52, 0.03, 5.15])
-"""
+def get_deterministic_target(stage, offset=TARGET_OFFSET):
+    """
+    Compute the spray target from the current palm crown centroid plus a
+    configurable offset. Re-reading the stage means the target tracks the
+    palm if it moves (e.g. under domain randomization).
+    """
+    return get_crown_centroid(stage) + offset
+
 
 class SprayOracle:
     """
-    Spray/retract oracle. States:
-      0 - Approach : fly EE to hover point above canopy
-      1 - Descend  : lower EE to spray position
-      2 - Spray    : hold position, spray signal active
-      3 - Retract  : pull back up to hover height
-      4 - Done
+    Finite State Machine (FSM) producing expert actions for VLA dataset collection.
+    Actions are Cartesian position deltas for a DifferentialIKController in
+    relative mode — each step commands a small displacement from the current EE
+    pose, clamped by ACTION_CLAMP.
 
-    Each movement state advances when either:
-      - EE is within POSITION_THRESHOLD of the target, OR
-      - The state has been active for MAX_STATE_STEPS (arm is visually close enough)
+    States: 0 (Approach Hover), 1 (Descend), 2 (Spray), 3 (Retract), 4 (Complete)
     """
-    POSITION_THRESHOLD = 0.08  # meters
-    MAX_STATE_STEPS = 200      # advance after this many steps regardless
+    POSITION_THRESHOLD = 0.05  # Distance tolerance (meters) to advance state
+    MAX_STATE_STEPS = 400      # Failsafe bound so a stuck state cannot hang the episode.
 
     def __init__(self):
         self.state = 0
         self.spray_counter = 0
         self.state_steps = 0
 
-    def _advance(self, next_state, msg):
-        print(f"[ORACLE]: {msg} (after {self.state_steps} steps)")
+    def _advance(self, next_state):
         self.state = next_state
         self.state_steps = 0
 
     def compute_action(self, ee_pos, spray_target):
         """
-        Returns a 7D action: [dX, dY, dZ, dRoll, dPitch, dYaw, spray]
-        spray: 1.0 = spraying, -1.0 = off
+        Return a 7D action vector:
+          [0:3] relative position delta toward the current waypoint
+          [3:6] zero orientation delta (no reorient during spray)
+          [6]   absolute gripper target (open during spray, closed otherwise)
         """
         action = np.zeros(7)
-        action[6] = -1.0  # spray off by default
+        action[6] = GRIPPER_CLOSED  # gripper default
 
-        # Calculate hover position directly above the randomized target
         hover_pos = spray_target.copy()
         hover_pos[2] += HOVER_OFFSET_Z
-    
-        # Calculate Delta Action Vectors (Relative movement for VLA)
+
         err_to_hover = hover_pos - ee_pos
         err_to_target = spray_target - ee_pos
         self.state_steps += 1
 
-        # State 0: Approach hover point above canopy
         if self.state == 0:
+            # Approach hover waypoint above the target
             action[0:3] = err_to_hover
             if np.linalg.norm(err_to_hover) < self.POSITION_THRESHOLD or self.state_steps >= self.MAX_STATE_STEPS:
-                self._advance(1, "Hover reached — DESCENDING to spray position")
+                self._advance(1)
 
-        # State 1: Descend to spray position
         elif self.state == 1:
+            # Descend to the target
             action[0:3] = err_to_target
             if np.linalg.norm(err_to_target) < self.POSITION_THRESHOLD or self.state_steps >= self.MAX_STATE_STEPS:
                 self.spray_counter = SPRAY_DURATION
-                self._advance(2, "At spray position — SPRAYING")
+                self._advance(2)
 
-        # State 2: Hold position and spray
         elif self.state == 2:
-            action[0:3] = err_to_target  # hold position
-            action[6] = 1.0              # spray on
+            # Hold position and "spray" by opening the gripper
+            action[0:3] = err_to_target
+            action[6] = GRIPPER_OPEN
             self.spray_counter -= 1
             if self.spray_counter <= 0:
-                self._advance(3, "Spray done — RETRACTING")
+                self._advance(3)
 
-        # State 3: Retract back to hover height
         elif self.state == 3:
+            # Retract back to the hover waypoint
             action[0:3] = err_to_hover
             if np.linalg.norm(err_to_hover) < self.POSITION_THRESHOLD or self.state_steps >= self.MAX_STATE_STEPS:
-                self._advance(4, "Retracted. Done.")
+                self._advance(4)
 
         return action
-        
-def main():
 
+
+def main():
     print("[INFO]: Setting up Isaac Lab Environment...")
-    # Parse configuration and create environment using gym.make (Safest way)
     env_cfg = parse_env_cfg(
         args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs, use_fabric=not args_cli.disable_fabric
     )
     env = gym.make(args_cli.task, cfg=env_cfg)
 
-    # reset environment to get initial observation
     obs, _ = env.reset()
+
+    # Cache the sim device and robot handle; used throughout the main loop.
+    sim_device = env.unwrapped.device
+    robot = env.unwrapped.scene["robot"]
+
+    # Acquire the USD stage — needed for leaf enumeration, target calc, marker.
+    import omni.usd
+    stage = omni.usd.get_context().get_stage()
+
+    # ---------------------------------------------------------
+    # STATIC BASE POSITIONING
+    # Calculate a specific shifted coordinate exactly ONCE
+    # to prevent cumulative positional drift on environment resets.
+    # ---------------------------------------------------------
+    shifted_pos = robot.data.root_pos_w.clone()
+    shifted_pos[:, 0] += 0.2032 # +X (in towards tree): 8 inches
+    shifted_pos[:, 2] += 0.127  # +Z (upwards): 5 inches
+    shifted_quat = robot.data.root_quat_w.clone()
+
+    absolute_shifted_pose = torch.cat([shifted_pos, shifted_quat], dim=-1)
+    robot.write_root_pose_to_sim(absolute_shifted_pose)
+    # ---------------------------------------------------------
+
+    # Dump joint metadata so REST_POSE_VALUES can be verified against actual DOF order.
+    print(f"[INFO] Joint names: {robot.data.joint_names}")
+    print(f"[INFO] Default joint pos: {robot.data.default_joint_pos[0].cpu().numpy()}")
+
+    # Build the rest-pose tensor on the sim device, padding/truncating to match the
+    # robot's real DOF count so a mis-sized REST_POSE_VALUES list can't crash the sim.
+    num_dof = robot.data.default_joint_pos.shape[-1]
+    rest_vals = REST_POSE_VALUES[:num_dof]
+    if len(rest_vals) < num_dof:
+        rest_vals = rest_vals + [0.0] * (num_dof - len(rest_vals))
+    REST_POSE = torch.tensor(rest_vals, device=sim_device, dtype=torch.float32).unsqueeze(0)
+
+    # Compute the crown centroid once from the pristine stage.
+    crown_centroid = get_crown_centroid(stage)
+    print(f"[INFO] Palm crown centroid: {crown_centroid.round(3)}")
+
+    # Cull only the very topmost leaves to clear an approach corridor.
+    remove_top_leaves(stage, crown_z=crown_centroid[2])
+
+    # Initialize the arm in the crunched rest configuration before the first episode.
+    set_rest_pose(env, REST_POSE)
     
-    # Create dataset directory
+    # Hold the rest pose for a few seconds so you can see it before motion starts.
+    import time
+    print("[INFO] Holding rest pose for 3 seconds...")
+    for _ in range(90):  # ~3 seconds at 30 Hz — step the sim with a zero action to render
+        zero_action = torch.zeros((1, 7), dtype=torch.float32, device=sim_device)
+        env.step(zero_action)
+    time.sleep(0.5)
+
+    # Dataset directory initialization
     dataset_dir = "vla_tree_dataset"
-    os.makedirs(dataset_dir, exist_ok=True)
-    
     img_dir = os.path.join(dataset_dir, "images")
     act_dir = os.path.join(dataset_dir, "actions")
-    
+
     os.makedirs(img_dir, exist_ok=True)
     os.makedirs(act_dir, exist_ok=True)
     print(f"[INFO]: Saving images to ./{img_dir}/ and actions to ./{act_dir}/")
-    
-    # Initialize Oracle Brain
-    oracle = SprayOracle()
-    
-    # Find out where the tree spawned initially
-    tree_poses, tree_quats = env.unwrapped.scene["custom_env"].get_world_poses()
-      
-    trunk_pos = get_tree_trunk_position(env)
-    reposition_robot(env, trunk_pos)
-    current_spray_target = get_dynamic_target(trunk_pos)
-    
-    print("[INFO]: Starting Oracle Data Generation Loop...")
-    
-    # print("ROBOT BODIES:", env.unwrapped.scene["robot"].body_names)
-    # print("CUSTOM ENV DICT:", env.unwrapped.scene["custom_env"].__dict__.keys())
-    # print("Current Goal/Command:", env.unwrapped.command_manager.get_command("object_pose"))
-    
-    """ 
-    Debug: Find available keys 
-    print("Available Command Keys: ", env.unwrapped.command_manager._terms.keys())
-    print("Available Scene Keys: ", env.unwrapped.scene.keys())
-    
-    if "custom_env" in env.unwrapped.scene.keys():
-        tree_pos, _ = env.unwrapped.scene["custom_env"].get_world_poses()
-        print(f"[INFO]: Background scene root at: {tree_pos[0].cpu().numpy()}")
 
-    print(f"[INFO]: Spray target set to {SPRAY_TARGET} (test placeholder — update once canopy position is known)")
-    # Debug: scan USD stage for prims that look like trees/plants and print their bounds
-    try:
-        import omni.usd
-        from pxr import UsdGeom, Gf
-        stage = omni.usd.get_context().get_stage()
-        bbox_cache = UsdGeom.BBoxCache(0, ["default", "render"])
-        print("[INFO]: Scanning scene for tall prims (likely tree canopy candidates):")
-        for prim in stage.Traverse():
-            path = str(prim.GetPath())
-            # Only look at prims inside the custom_env scene, skip small/non-mesh prims
-            if "Scene" not in path:
-                continue
-            if not prim.IsA(UsdGeom.Xform) and not prim.IsA(UsdGeom.Mesh):
-                continue
-            try:
-                bbox = bbox_cache.ComputeWorldBound(prim)
-                rng = bbox.GetRange()
-                height = rng.GetMax()[2] - rng.GetMin()[2]
-                if height > 1.0:  # only prims taller than 1m
-                    center = (rng.GetMin() + rng.GetMax()) / 2
-                    top = rng.GetMax()[2]
-                    print(f"  {path} | height={height:.2f}m | center=({center[0]:.2f},{center[1]:.2f},{center[2]:.2f}) | top_z={top:.2f}")
-            except Exception:
-                pass
-    except Exception as e:
-        print(f"[INFO]: USD stage scan skipped ({e})")
-    """
-    # Cache device and gripper index once outside the loop
-    sim_device = env.unwrapped.device
+    # Initialize the trajectory planner and visualize where it's aiming.
+    oracle = SprayOracle()
+    current_spray_target = get_deterministic_target(stage)
+    spawn_target_marker(stage, current_spray_target)
+
+    # Resolve the gripper body index once to avoid repeated name lookups in the hot loop.
     gripper_indices, _ = env.unwrapped.scene["robot"].find_bodies("moving_gripper")
     gripper_idx = gripper_indices[0]
 
     step = 0
-    global_record_step = 0 # Counter for dataset filenames
-    # Start simulation
+    global_record_step = 0
+
+    print("[INFO]: Starting Oracle Data Generation Loop...")
     while simulation_app.is_running():
-        # Pull the world position for the specific link
-        # Shape is (num_envs, num_bodies, 3). Want env 0, for gripper_idx
+        # Pull the absolute world coordinate of the end-effector
         ee_position = env.unwrapped.scene["robot"].data.body_pos_w[0, gripper_idx].cpu().numpy()
 
-        # Ask Oracle for action vector (fixed test target for now)
-        delta_action = oracle.compute_action(ee_position, current_spray_target)
+        # The oracle returns a relative Cartesian delta toward the current waypoint.
+        # The IK controller is configured with use_relative_mode=True, so we send
+        # this delta directly — no conversion to absolute coordinates.
+        action = oracle.compute_action(ee_position, current_spray_target)
+        action[:3] = np.clip(action[:3], -ACTION_CLAMP, ACTION_CLAMP)
 
-        # Clamp position deltas — IK controller uses relative mode, needs small steps
-        delta_action[:3] = np.clip(delta_action[:3], -ACTION_CLAMP, ACTION_CLAMP)
-        
-        # Calculate absolute action for physics engine
-        # Current position + Delta movement = Next absolute position
-        env_action = delta_action.copy()
-        env_action[:3] = ee_position + delta_action[:3]
+        # Upload to the sim device.
+        action_tensor = torch.tensor(action, dtype=torch.float32, device=sim_device).unsqueeze(0)
 
-        # Build float32 tensor directly on sim device (no CPU→GPU transfer)
-        # Shape: (1, 7) = (num_envs, action_dim)
-        # Build tensor based on absolute action in simulation
-        action_tensor = torch.tensor(env_action, dtype=torch.float32, device=sim_device).unsqueeze(0)
-
-        # Data Recording Engine
+        # Record visual and state data while the episode is active
         if oracle.state < 4:
-        
-            # Grab raw RGB tensor from  camera and convert to Numpy
             img_tensor = env.unwrapped.scene["wrist_camera"].data.output["rgb"][0]
             img_numpy = img_tensor.cpu().numpy()
-            
-            # Convert RGB to BGR for OpenCV
+
             if img_numpy.shape[-1] == 4:
                 img_bgr = cv2.cvtColor(img_numpy, cv2.COLOR_RGBA2BGR)
             else:
                 img_bgr = cv2.cvtColor(img_numpy, cv2.COLOR_RGB2BGR)
-                
-            # Format filenames (I.E. frame_00142.jpg)
+
             step_str = str(global_record_step).zfill(5)
-            
-            # Save visual and numeric state to disk
+
             cv2.imwrite(os.path.join(img_dir, f"frame_{step_str}.jpg"), img_bgr)
-            np.save(os.path.join(act_dir, f"action_{step_str}.npy"), delta_action)
+            np.save(os.path.join(act_dir, f"action_{step_str}.npy"), action)
             global_record_step += 1
-            
+
             if global_record_step >= 25000:
                 print(f"[INFO]: Successfully collected {global_record_step} frames! Shutting down.")
                 simulation_app.close()
                 break
-        
-        # Heartbeat: print every 50 steps
+
+        # Telemetry heartbeat
         if step % 50 == 0:
             print(f"[STEP {step:05d}] state={oracle.state} | "
                   f"ee={ee_position.round(3)} | target={current_spray_target.round(3)} | "
-                  f"action={action_tensor[0].cpu().numpy().round(3)} | "
-                  f"tensor dtype={action_tensor.dtype} device={action_tensor.device}")
+                  f"action={action_tensor[0].cpu().numpy().round(3)}")
 
+        # Advance physics engine
         env.step(action_tensor)
         step += 1
 
-       # Reset environment once the spray cycle is complete (or if it gets stuck)
+        # Episode completion reset
         if oracle.state == 4 or oracle.state_steps >= oracle.MAX_STATE_STEPS:
-            if oracle.state_steps >= oracle.MAX_STATE_STEPS:
-                print("[WARNING]: Target was an unreachable outlier. Resetting episode.")
-            else:
-                print("[INFO]: Success! Resetting environment for next sequence.")
-                
             env.reset()
+
+            # Snap the base back to the exact pre-calculated shifted coordinate
+            env.unwrapped.scene["robot"].write_root_pose_to_sim(absolute_shifted_pose)
+
+            # Restore the crunched joint configuration so every episode starts
+            # from a consistent rest state rather than wherever the arm finished.
+            set_rest_pose(env, REST_POSE)
+
             oracle = SprayOracle()
-            
-            # Get Randomized Tree Position
-            # Get the coordinates of the tree.
-            tree_poses, _ = env.unwrapped.scene["custom_env"].get_world_poses()
-            trunk_pos = get_tree_trunk_position(env)
-            reposition_robot(env, trunk_pos)
-            
-            # Calculate the new relative target
-            current_spray_target = get_dynamic_target(trunk_pos)  # targets relative to trunk, not ground
+            current_spray_target = get_deterministic_target(stage)
             step = 0
-            
+
+
 if __name__ == "__main__":
     main()
