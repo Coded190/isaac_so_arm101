@@ -29,40 +29,11 @@ from isaaclab.utils.math import quat_from_euler_xyz
 from isaaclab.envs.mdp import DifferentialInverseKinematicsActionCfg
 from isaaclab.controllers import DifferentialIKControllerCfg
 
-# imports for tree randomization event
-from isaaclab.managers import EventTermCfg as EventTerm
-from isaaclab.managers import SceneEntityCfg
-import isaaclab.envs.mdp as core_mdp
-
 
 ##
 # Scene definition
 ##
 
-@configclass
-class TreeRandomizationEventCfg:
-    """Configuration for randomization events."""
-    
-    # Randomize Tree Position on Reset
-    randomize_tree_position = EventTerm(
-        func=core_mdp.reset_root_state_uniform,
-        mode="reset", 
-        params={
-            "asset_cfg": SceneEntityCfg("custom_env"),
-            "pose_range": {"x": (-0.05, 0.05), "y": (-0.05, 0.05), "yaw": (-3.14, 3.14)},
-            "velocity_range": {},
-        },
-    )
-
-    # Randomize Tree Scale
-    randomize_tree_scale = EventTerm(
-        func=core_mdp.randomize_rigid_body_scale,
-        mode="reset",
-        params={
-            "asset_cfg": SceneEntityCfg("custom_env"),
-            "scale_range": (0.8, 1.2), 
-        },
-    )
 
 @configclass
 class SoArm100ReachEnvCfg(ReachEnvCfg):
@@ -151,7 +122,6 @@ class PingTiReachEnvCfg(ReachEnvCfg):
 
         # switch robot to franka
         self.scene.robot = PING_TI_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
-    
         # override rewards
         self.rewards.end_effector_position_tracking.params["asset_cfg"].body_names = ["moving_gripper"] # link name used for reward
         self.rewards.end_effector_position_tracking_fine_grained.params["asset_cfg"].body_names = ["moving_gripper"]
@@ -219,8 +189,8 @@ class ReachVlaSceneCfg(ReachSceneCfg):
             horizontal_aperture=20.955,
             clipping_range=(0.01, 100.0),
         ),
-        width=244, # OpenVLA expects 244 x 244
-        height=244,
+        width=256,
+        height=256,
         # Apply your exact X, Y, Z position and the converted Rotation
         offset=TiledCameraCfg.OffsetCfg(
             pos=(-0.01371, 0.03346, -0.02114),
@@ -232,7 +202,6 @@ class ReachVlaSceneCfg(ReachSceneCfg):
 @configclass
 class ReachVlaEnvCfg(PingTiReachEnvCfg):
     """The main environment config using the VLA scene."""
-        
     def __post_init__(self):
         # This populates the robot, rewards, and other settings from the PingTiReachEnvCfg
         super().__post_init__()
@@ -261,4 +230,3 @@ class ReachVlaEnvCfg(PingTiReachEnvCfg):
             scale=1.0, 
             use_default_offset=False 
         )
-        
