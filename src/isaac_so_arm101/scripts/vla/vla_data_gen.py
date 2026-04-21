@@ -98,7 +98,7 @@ def _leaf_world_positions(stage):
             continue
     return out
 
-
+'''Can we just get the coordinates of the crown centroid instead of the leaf position's mean?'''
 def get_crown_centroid(stage):
     """
     Return the centroid of the palm's leaf cluster in world coordinates.
@@ -209,6 +209,9 @@ class SprayOracle:
         if self.state == 0:
             # Approach hover waypoint above the target
             action[0:3] = err_to_hover
+            ############
+            # what if the arm doesn't reach the threshold by state steps? does it descend when not in position?
+            ############
             if np.linalg.norm(err_to_hover) < self.POSITION_THRESHOLD or self.state_steps >= self.MAX_STATE_STEPS:
                 self._advance(1)
 
