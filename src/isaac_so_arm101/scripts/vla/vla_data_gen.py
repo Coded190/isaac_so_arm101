@@ -171,18 +171,28 @@ def spawn_target_marker(stage, position_world, marker_path, radius=0.04, color=(
     print(f"[DEBUG] Target marker at {np.asarray(position_world).round(3)} -> {marker_path}") 
 
 
-def spawn_target_markers(stage, target_positions):
+def spawn_target_markers(stage, target_positions, env_ids=None):
     """Spawn one target marker per environment."""
-    for env_id in range(target_positions.shape[0]):
+    if env_ids is None:
+        env_ids = range(target_positions.shape[0])
+    for env_id in env_ids:
         marker_path = f"/World/debug_target_markers/env_{env_id}"
         spawn_target_marker(stage, target_positions[env_id], marker_path=marker_path)
 
 
-def set_rest_pose(env, rest_pose_tensor): 
+def set_rest_pose(env, rest_pose_tensor, env_ids=None): 
     """Snap the arm to its rest configuration with zero joint velocity.""" 
     robot = env.unwrapped.scene["robot"] 
-    zero_vel = torch.zeros_like(rest_pose_tensor) 
-    robot.write_joint_state_to_sim(rest_pose_tensor, zero_vel) 
+    if env_ids is None:
+        joint_pos = rest_pose_tensor.expand(env.unwrapped.num_envs, -1)
+        zero_vel = torch.zeros_like(joint_pos)
+        robot.write_joint_state_to_sim(joint_pos, zero_vel)
+        return
+
+    env_ids_t = torch.as_tensor(env_ids, device=rest_pose_tensor.device, dtype=torch.long)
+    joint_pos = rest_pose_tensor.expand(env_ids_t.shape[0], -1)
+    zero_vel = torch.zeros_like(joint_pos)
+    robot.write_joint_state_to_sim(joint_pos, zero_vel, env_ids=env_ids_t)
 
 
 def get_deterministic_target(stage, palm_root_path, offset=TARGET_OFFSET): 
@@ -194,11 +204,14 @@ def get_deterministic_target(stage, palm_root_path, offset=TARGET_OFFSET):
     return get_crown_centroid(stage, palm_root_path) + offset 
 
 
-def prepare_episode_targets(stage, palm_root_paths, episode_rng, cull_prob):
+def prepare_episode_targets(stage, palm_root_paths, episode_rng, cull_prob, env_ids=None):
     """Prepare per-env crown targets and optional top-leaf culling decisions."""
+    if env_ids is None:
+        env_ids = list(range(len(palm_root_paths)))
     targets = []
     cull_count = 0
-    for palm_root_path in palm_root_paths:
+    for env_id in env_ids:
+        palm_root_path = palm_root_paths[env_id]
         set_leaf_prims_active(stage, palm_root_path, active=True)
         crown_centroid = get_crown_centroid(stage, palm_root_path)
         should_cull = episode_rng.random() < cull_prob
@@ -206,7 +219,7 @@ def prepare_episode_targets(stage, palm_root_paths, episode_rng, cull_prob):
             remove_top_leaves(stage, palm_root_path, crown_z=crown_centroid[2])
             cull_count += 1
         targets.append(get_deterministic_target(stage, palm_root_path))
-    print(f"[INFO] Episode prep complete: culled top leaves in {cull_count}/{len(palm_root_paths)} envs.")
+    print(f"[INFO] Episode prep complete: culled top leaves in {cull_count}/{len(env_ids)} envs.")
     return np.asarray(targets, dtype=np.float32)
 
 
@@ -220,7 +233,7 @@ class SprayOracle:
     States: 0 (Approach Hover), 1 (Descend), 2 (Spray), 3 (Retract), 4 (Complete) 
     """ 
     POSITION_THRESHOLD = 0.05 # Distance tolerance (meters) to advance state 
-    MAX_STATE_STEPS = 400 # Failsafe bound so a stuck state cannot hang the episode. 
+    MAX_STATE_STEPS = 360 # Match the env's max episode length so timeout logic stays aligned. 
 
     def __init__(self): 
         self.state = 0 
@@ -344,7 +357,8 @@ def main():
     REST_POSE = torch.tensor(rest_vals, device=sim_device, dtype=torch.float32).unsqueeze(0) 
 
     # Compute the crown centroid once from the pristine stage. 
-    current_spray_targets = prepare_episode_targets(
+    current_spray_targets = np.zeros((num_envs, 3), dtype=np.float32)
+    current_spray_targets[:] = prepare_episode_targets(
         stage=stage,
         palm_root_paths=palm_root_paths,
         episode_rng=episode_rng,
@@ -485,44 +499,51 @@ def main():
                 f"saved_frames={int(saved_frame_count.sum())}") 
 
         # Advance physics engine 
-        env.step(action_tensor) 
+        obs, _, terminated, truncated, _ = env.step(action_tensor)
         step += 1 
 
-        # Episode completion reset 
-        if all(oracle.state == 4 for oracle in oracles): 
+        terminated_t = torch.as_tensor(terminated, device=sim_device, dtype=torch.bool)
+        truncated_t = torch.as_tensor(truncated, device=sim_device, dtype=torch.bool)
+        done_mask = torch.logical_or(terminated_t, truncated_t).reshape(-1)
+        done_env_ids_t = torch.nonzero(done_mask, as_tuple=False).squeeze(-1)
+        done_env_ids = done_env_ids_t.cpu().tolist() if done_env_ids_t.numel() > 0 else []
+
+        # Per-env lifecycle reset driven by env termination signals.
+        if done_env_ids:
             if args_cli.save_data and datasets is not None:
-                for env_id in range(num_envs):
+                for env_id in done_env_ids:
                     if oracles[env_id].completed and not oracles[env_id].timed_out:
-                        # Save only successful episodes so timeout failures stay out of the dataset.
                         if datasets[env_id].has_pending_frames():
                             datasets[env_id].save_episode()
                             saved_frame_count[env_id] += episode_frame_count[env_id]
                     else:
                         if datasets[env_id].has_pending_frames():
                             datasets[env_id].clear_episode_buffer()
-                print(f"[INFO]: Episode batch complete. Total frames saved so far: {int(saved_frame_count.sum())}") 
-            else:
-                print(f"[INFO]: Episode batch complete. Test mode, no data saved. Steps progressed: {step}") 
+            print(
+                f"[INFO]: Resetting {len(done_env_ids)} env(s) on termination/truncation. "
+                f"Total frames saved so far: {int(saved_frame_count.sum())}"
+            )
 
-            env.reset() 
+            done_env_ids_reset_t = torch.as_tensor(done_env_ids, device=sim_device, dtype=torch.long)
+            robot.write_root_pose_to_sim(
+                absolute_shifted_pose.index_select(0, done_env_ids_reset_t),
+                env_ids=done_env_ids_reset_t,
+            )
+            set_rest_pose(env, REST_POSE, env_ids=done_env_ids)
 
-            # Snap the base back to the exact pre-calculated shifted coordinate 
-            env.unwrapped.scene["robot"].write_root_pose_to_sim(absolute_shifted_pose) 
-
-            # Restore the crunched joint configuration so every episode starts 
-            # from a consistent rest state rather than wherever the arm finished. 
-            set_rest_pose(env, REST_POSE) 
-
-            oracles = [SprayOracle() for _ in range(num_envs)]
-            current_spray_targets = prepare_episode_targets(
+            refreshed_targets = prepare_episode_targets(
                 stage=stage,
                 palm_root_paths=palm_root_paths,
                 episode_rng=episode_rng,
                 cull_prob=args_cli.top_leaf_cull_prob,
+                env_ids=done_env_ids,
             )
-            spawn_target_markers(stage, current_spray_targets)
-            step = 0 
-            episode_frame_count[:] = 0 
+            for i, env_id in enumerate(done_env_ids):
+                current_spray_targets[env_id] = refreshed_targets[i]
+                oracles[env_id] = SprayOracle()
+                episode_frame_count[env_id] = 0
+            spawn_target_markers(stage, current_spray_targets, env_ids=done_env_ids)
+            env.render(recompute=True)
 
     if args_cli.save_data and datasets is not None:
         for env_id in range(num_envs):

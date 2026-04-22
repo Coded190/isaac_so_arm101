@@ -205,6 +205,7 @@ class ReachVlaEnvCfg(PingTiReachEnvCfg):
     def __post_init__(self):
         # This populates the robot, rewards, and other settings from the PingTiReachEnvCfg
         super().__post_init__()
+        self.num_rerenders_on_reset = 1
 
         # Save the robot, swap to our camera scene, and put robot back
         configured_robot = self.scene.robot
