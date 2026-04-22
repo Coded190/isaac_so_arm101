@@ -543,7 +543,6 @@ def main():
                 oracles[env_id] = SprayOracle()
                 episode_frame_count[env_id] = 0
             spawn_target_markers(stage, current_spray_targets, env_ids=done_env_ids)
-            env.render(recompute=True)
 
     if args_cli.save_data and datasets is not None:
         for env_id in range(num_envs):
