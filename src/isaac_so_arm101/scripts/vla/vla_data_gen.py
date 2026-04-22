@@ -49,7 +49,7 @@ from isaaclab_tasks.utils import parse_env_cfg
 # action[0:3] -> relative position delta (meters) for the DifferentialIKController 
 # action[3:6] -> relative orientation delta (axis-angle, radians) — left at zero here 
 # action[6] -> absolute gripper joint target (radians), NOT a spray flag 
-ACTION_CLAMP = 0.05 # Max Cartesian delta per step (meters). Small → stable IK, larger → faster motion. 
+ACTION_CLAMP = 1.0 # Max Cartesian delta per step (meters). Small → stable IK, larger → faster motion. 
 POSITION_GAIN = 0.75 # Proportional gain for Cartesian position tracking. 
 HOVER_OFFSET_Z = 0.10 # Vertical offset above the target for the approach waypoint. 
 SPRAY_DURATION = 60 # Sim steps to "spray" at the target (~2 s at 30 Hz). 
@@ -233,7 +233,7 @@ class SprayOracle:
     States: 0 (Approach Hover), 1 (Descend), 2 (Spray), 3 (Retract), 4 (Complete) 
     """ 
     POSITION_THRESHOLD = 0.05 # Distance tolerance (meters) to advance state 
-    MAX_STATE_STEPS = 360 # Match the env's max episode length so timeout logic stays aligned. 
+    MAX_STATE_STEPS = 340 # Match the env's max episode length so timeout logic stays aligned. 
 
     def __init__(self): 
         self.state = 0 
@@ -435,6 +435,7 @@ def main():
     step = 0 
     episode_frame_count = np.zeros(num_envs, dtype=np.int64)
     saved_frame_count = np.zeros(num_envs, dtype=np.int64)
+    prev_dist_to_target = np.full(num_envs, np.nan, dtype=np.float64)
 
     print("[INFO]: Starting Oracle Data Generation Loop...") 
     while simulation_app.is_running(): 
@@ -442,6 +443,7 @@ def main():
         ee_pos_all = env.unwrapped.scene["robot"].data.body_pos_w[:, gripper_idx].cpu().numpy() 
         ee_quat_all = env.unwrapped.scene["robot"].data.body_quat_w[:, gripper_idx].cpu().numpy() 
         joint_positions_all = env.unwrapped.scene["robot"].data.joint_pos.cpu().numpy() 
+        dist_to_target_all = np.linalg.norm(current_spray_targets - ee_pos_all, axis=1)
 
         # Action Computation 
         action_batch = np.zeros((num_envs, 7), dtype=np.float32)
@@ -494,9 +496,21 @@ def main():
 
         # Telemetry heartbeat 
         if step % 50 == 0: 
-            complete_envs = sum(1 for oracle in oracles if oracle.state == 4)
-            print(f"[STEP {step:05d}] completed_envs={complete_envs}/{num_envs} | "
-                f"saved_frames={int(saved_frame_count.sum())}") 
+            state_values = np.array([oracle.state for oracle in oracles], dtype=np.int64)
+            state_counts = np.bincount(state_values, minlength=5)
+            print(
+                f"[STEP {step:05d}] states=0:{state_counts[0]} 1:{state_counts[1]} 2:{state_counts[2]} "
+                f"3:{state_counts[3]} 4:{state_counts[4]} | saved_frames={int(saved_frame_count.sum())}"
+            )
+            for env_id in range(num_envs):
+                prev_dist = prev_dist_to_target[env_id]
+                curr_dist = float(dist_to_target_all[env_id])
+                delta_str = "na" if np.isnan(prev_dist) else f"{curr_dist - prev_dist:+.3f}"
+                print(
+                    f"[E{env_id:04d}] s={oracles[env_id].state} steps={oracles[env_id].state_steps:03d} "
+                    f"dist={curr_dist:.3f} d_dist={delta_str}"
+                )
+            prev_dist_to_target[:] = dist_to_target_all
 
         # Advance physics engine 
         obs, _, terminated, truncated, _ = env.step(action_tensor)
@@ -542,6 +556,7 @@ def main():
                 current_spray_targets[env_id] = refreshed_targets[i]
                 oracles[env_id] = SprayOracle()
                 episode_frame_count[env_id] = 0
+                prev_dist_to_target[env_id] = np.nan
             spawn_target_markers(stage, current_spray_targets, env_ids=done_env_ids)
 
     if args_cli.save_data and datasets is not None:
