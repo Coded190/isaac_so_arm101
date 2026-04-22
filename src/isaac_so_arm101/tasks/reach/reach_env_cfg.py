@@ -215,7 +215,7 @@ class ReachEnvCfg(ManagerBasedRLEnvCfg):
 
     # Scene settings
     # scene: ReachSceneCfg = ReachSceneCfg(num_envs=4096, env_spacing=2.5)
-    scene: ReachSceneCfg = ReachSceneCfg(num_envs=4096, env_spacing=50.0)
+    scene: ReachSceneCfg = ReachSceneCfg(num_envs=4096, env_spacing=70.0)
     # Basic settings
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()
