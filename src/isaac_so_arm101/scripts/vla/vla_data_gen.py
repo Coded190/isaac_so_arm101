@@ -64,13 +64,13 @@ GRIPPER_CLOSED = 0.0 # "Spray off" joint position (leave equal if gripper is unu
 # Joint order matches robot.data.joint_names for the SO-ARM101: 
 # [base_yaw, shoulder_pitch, elbow_pitch, wrist_pitch, wrist_roll, gripper_moving] 
 REST_POSE_VALUES = [ 
-    0.0, # base_yaw (0 = facing forward) 
-    -1.8, # shoulder_pitch (negative = tucked down) 
-    2.8, # elbow_pitch (folded up) 
-    -1.5, # wrist_pitch (curled in) 
-    0.0, # wrist_roll 
-    0.0, # gripper_moving 
-] 
+    0.0,   # base_yaw (0 = facing forward) 
+    -1.5,  # shoulder_pitch (Safely inside [-1.693, 1.448]) 
+    1.5,   # elbow_pitch (Safely inside [-1.448, 1.693]) 
+    -1.0,  # wrist_pitch (Relaxed a bit to avoid limits) 
+    0.0,   # wrist_roll 
+    0.0,   # gripper_moving 
+]   
 
 # Leaf culling parameters. Only leaves whose world Z is above (crown_z + offset) 
 # are candidates for removal. A positive offset culls only the very topmost leaves, 
