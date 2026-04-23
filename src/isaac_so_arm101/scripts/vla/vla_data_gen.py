@@ -222,6 +222,37 @@ def prepare_episode_targets(stage, palm_root_paths, episode_rng, cull_prob, env_
     print(f"[INFO] Episode prep complete: culled top leaves in {cull_count}/{len(env_ids)} envs.")
     return np.asarray(targets, dtype=np.float32)
 
+DOWN_QUAT = np.array([0.2588, 0.9659, 0.0, 0.0])
+ORIENTATION_CLAMP = 0.2
+
+def _quat_multiply(q1, q2):
+    """Hamilton product of two quaternions in [w, x, y, z] order."""
+    w1, x1, y1, z1 = q1
+    w2, x2, y2, z2 = q2
+    return np.array([
+        w1*w2 - x1*x2 - y1*y2 - z1*z2,
+        w1*x2 + x1*w2 + y1*z2 - z1*y2,
+        w1*y2 - x1*z2 + y1*w2 + z1*x2,
+        w1*z2 + x1*y2 - y1*x2 + z1*w2,
+    ])
+
+def _quat_conjugate(q):
+    """Conjugate of a unit quaternion [w, x, y, z]."""
+    return np.array([q[0], -q[1], -q[2], -q[3]])
+
+def _quat_to_axis_angle(q):
+    """Convert a unit quaternion [w, x, y, z] to an axis-angle 3-vector."""
+    q = np.asarray(q, dtype=np.float64)
+    n = np.linalg.norm(q)
+    if n < 1e-9: return np.zeros(3)
+    q = q / n
+    if q[0] < 0.0: q = -q
+    w = float(np.clip(q[0], -1.0, 1.0))
+    sin_half = np.sqrt(max(0.0, 1.0 - w * w))
+    if sin_half < 1e-6: return np.zeros(3)
+    angle = 2.0 * np.arccos(w)
+    axis = q[1:4] / sin_half
+    return axis * angle
 
 class SprayOracle: 
     """ 
@@ -233,7 +264,7 @@ class SprayOracle:
     States: 0 (Approach Hover), 1 (Descend), 2 (Spray), 3 (Retract), 4 (Complete) 
     """ 
     POSITION_THRESHOLD = 0.05 # Distance tolerance (meters) to advance state 
-    MAX_STATE_STEPS = 340 # Match the env's max episode length so timeout logic stays aligned. 
+    MAX_STATE_STEPS = 430 # Match the env's max episode length so timeout logic stays aligned. 
 
     def __init__(self): 
         self.state = 0 
@@ -256,7 +287,7 @@ class SprayOracle:
     def _position_command(self, error_vector):
         return self._cap_vector_norm(POSITION_GAIN * error_vector, ACTION_CLAMP)
 
-    def compute_action(self, ee_pos, spray_target): 
+    def compute_action(self, ee_pos, ee_quat, spray_target):
         """ 
         Return a 7D action vector: 
         [0:3] relative position delta toward the current waypoint 
@@ -265,7 +296,12 @@ class SprayOracle:
         """ 
         action = np.zeros(7) 
         action[6] = 0.0 
-
+        
+        # Compute dynamic orientation correction
+        err_quat = _quat_multiply(DOWN_QUAT, _quat_conjugate(ee_quat))
+        err_axis_angle = _quat_to_axis_angle(err_quat)
+        action[3:6] = self._cap_vector_norm(err_axis_angle, ORIENTATION_CLAMP)
+        
         hover_pos = spray_target.copy() 
         hover_pos[2] += HOVER_OFFSET_Z 
 
@@ -315,6 +351,29 @@ def main():
     env_cfg = parse_env_cfg( 
         args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs, use_fabric=not args_cli.disable_fabric 
     ) 
+    
+    # Offset the default start position so Isaac Lab resets the robot here automatically
+    default_pos = env_cfg.scene.robot.init_state.pos
+    env_cfg.scene.robot.init_state.pos = (
+        default_pos[0] + 0.05,
+        default_pos[1] - 0.179,
+        default_pos[2] + 0.127
+    )
+    
+    # Map the REST_POSE_VALUES directly to the starting joint state
+    env_cfg.scene.robot.init_state.joint_pos = {
+        "base_yaw": REST_POSE_VALUES[0], 
+        "shoulder_pitch": REST_POSE_VALUES[1], 
+        "elbow_pitch": REST_POSE_VALUES[2], 
+        "wrist_pitch": REST_POSE_VALUES[3], 
+        "wrist_roll": REST_POSE_VALUES[4], 
+        "gripper_moving": REST_POSE_VALUES[5]
+    }
+    
+    # Extend the maximum episode length (e.g., to 15 seconds) so the 
+    # SprayOracle FSM has enough time to reach the target before the environment resets.
+    env_cfg.episode_length_s = 15.0
+    
     env = gym.make(args_cli.task, cfg=env_cfg) 
 
     obs, _ = env.reset() 
@@ -340,8 +399,8 @@ def main():
     shifted_pos[:, 2] += 0.127 # +Z (upwards): 5 inches 
     shifted_quat = robot.data.root_quat_w.clone() 
 
-    absolute_shifted_pose = torch.cat([shifted_pos, shifted_quat], dim=-1) 
-    robot.write_root_pose_to_sim(absolute_shifted_pose) 
+    # absolute_shifted_pose = torch.cat([shifted_pos, shifted_quat], dim=-1) 
+    # robot.write_root_pose_to_sim(absolute_shifted_pose) 
     # --------------------------------------------------------- 
 
     # Dump joint metadata so REST_POSE_VALUES can be verified against actual DOF order. 
@@ -367,7 +426,7 @@ def main():
     print(f"[INFO] Prepared per-env crown targets for {num_envs} environments.")
 
     # Initialize the arm in the crunched rest configuration before the first episode. 
-    set_rest_pose(env, REST_POSE) 
+    # set_rest_pose(env, REST_POSE) 
     # Hold the rest pose for a few seconds so you can see it before motion starts. 
     import time 
     print("[INFO] Holding rest pose for 3 seconds...") 
@@ -448,7 +507,7 @@ def main():
         # Action Computation 
         action_batch = np.zeros((num_envs, 7), dtype=np.float32)
         for env_id in range(num_envs):
-            env_action = oracles[env_id].compute_action(ee_pos_all[env_id], current_spray_targets[env_id])
+            env_action = oracles[env_id].compute_action(ee_pos_all[env_id], ee_quat_all[env_id], current_spray_targets[env_id])
             env_action[:3] = np.clip(env_action[:3], -ACTION_CLAMP, ACTION_CLAMP)
             action_batch[env_id] = env_action
 
@@ -539,11 +598,11 @@ def main():
             )
 
             done_env_ids_reset_t = torch.as_tensor(done_env_ids, device=sim_device, dtype=torch.long)
-            robot.write_root_pose_to_sim(
-                absolute_shifted_pose.index_select(0, done_env_ids_reset_t),
-                env_ids=done_env_ids_reset_t,
-            )
-            set_rest_pose(env, REST_POSE, env_ids=done_env_ids)
+            # robot.write_root_pose_to_sim(
+            #     absolute_shifted_pose.index_select(0, done_env_ids_reset_t),
+            #     env_ids=done_env_ids_reset_t,
+            # )
+            # set_rest_pose(env, REST_POSE, env_ids=done_env_ids)
 
             refreshed_targets = prepare_episode_targets(
                 stage=stage,
