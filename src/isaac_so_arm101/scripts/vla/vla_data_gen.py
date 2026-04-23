@@ -49,9 +49,9 @@ from isaaclab_tasks.utils import parse_env_cfg
 # action[0:3] -> relative position delta (meters) for the DifferentialIKController 
 # action[3:6] -> relative orientation delta (axis-angle, radians) — left at zero here 
 # action[6] -> absolute gripper joint target (radians), NOT a spray flag 
-ACTION_CLAMP = 1.0 # Max Cartesian delta per step (meters). Small → stable IK, larger → faster motion. 
+ACTION_CLAMP = 0.5 # Max Cartesian delta per step (meters). Small → stable IK, larger → faster motion. 
 POSITION_GAIN = 0.75 # Proportional gain for Cartesian position tracking. 
-HOVER_OFFSET_Z = 0.10 # Vertical offset above the target for the approach waypoint. 
+HOVER_OFFSET_Z = 0.13 # Vertical offset above the target for the approach waypoint. 
 SPRAY_DURATION = 60 # Sim steps to "spray" at the target (~2 s at 30 Hz). 
 
 # Gripper joint targets. Since action[6] is the absolute joint position, we open 
@@ -357,7 +357,7 @@ def main():
     env_cfg.scene.robot.init_state.pos = (
         default_pos[0] + 0.05,
         default_pos[1] - 0.179,
-        default_pos[2] + 0.127
+        default_pos[2] + 0.1524
     )
     
     # Map the REST_POSE_VALUES directly to the starting joint state
