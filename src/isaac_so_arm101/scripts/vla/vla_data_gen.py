@@ -79,7 +79,7 @@ LEAF_CULL_Z_OFFSET = 0.03 # Start culling 3 cm above the crown centroid
 LEAF_KEEP_RATIO = 0.8 # Keep 80% of the top leaves; only remove the highest 20% 
 
 # Spray target tuning, expressed as an offset from the computed crown centroid. 
-TARGET_OFFSET = np.array([0.0, 0.0, 0.20]) 
+TARGET_OFFSET = np.array([0.0, 0.0, 0.30]) 
 TASK_DESCRIPTION = "spray deterministically tracked palm crown"
 MAX_TOTAL_SAVED_FRAMES = 25000
 
