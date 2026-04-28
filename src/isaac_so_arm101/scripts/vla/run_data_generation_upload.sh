@@ -10,7 +10,7 @@ echo "============================================================"
 # Run the data generation script exactly as you normally would
 uv run vla_data_gen.py \
     --task Isaac-PING-TI-VLA-v0 \
-    --num_envs 100 \
+    --num_envs 10 \
     --enable_cameras \
     --save_data
 
