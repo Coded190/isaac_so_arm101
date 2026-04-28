@@ -79,7 +79,7 @@ LEAF_KEEP_RATIO = 0.8 # Keep 80% of the top leaves; only remove the highest 20%
 
 # Spray target tuning, expressed as an offset from the computed crown centroid. 
 HOVER_OFFSET = np.array([0.0, 0.0, 0.35]) # Crown centroid + 35cm Z-height
-TASK_DESCRIPTION = "spray deterministically tracked palm crown"
+TASK_DESCRIPTION = "Move end effector above palm crown, angle end effector downward, and hold while end effector is spraying."
 MAX_TOTAL_SAVED_FRAMES = 25000
 
 
