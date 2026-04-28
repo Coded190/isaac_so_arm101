@@ -273,7 +273,7 @@ class SprayOracle:
         self.completed = False 
         self.timed_out = False 
 
-def _advance(self, next_state): 
+    def _advance(self, next_state): 
         self.state = next_state 
         self.state_steps = 0 
 
