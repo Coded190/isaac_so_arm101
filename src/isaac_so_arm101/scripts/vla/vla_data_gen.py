@@ -222,7 +222,7 @@ def prepare_episode_targets(stage, palm_root_paths, episode_rng, cull_prob, env_
     print(f"[INFO] Episode prep complete: culled top leaves in {cull_count}/{len(env_ids)} envs.")
     return np.asarray(targets, dtype=np.float32)
 
-DOWN_QUAT = np.array([0.2588, 0.9659, 0.0, 0.0])
+DOWN_QUAT = np.array([0.2588, 0.0, -0.9659, 0.0])
 ORIENTATION_CLAMP = 0.2
 
 def _quat_multiply(q1, q2):
@@ -257,14 +257,12 @@ def _quat_to_axis_angle(q):
 class SprayOracle: 
     """ 
     Finite State Machine (FSM) producing expert actions for VLA dataset collection. 
-    Actions are Cartesian position deltas for a DifferentialIKController in 
-    relative mode — each step commands a small displacement from the current EE 
-    pose, clamped by ACTION_CLAMP. 
-
-    States: 0 (Approach Hover), 1 (Descend), 2 (Spray), 3 (Retract), 4 (Complete) 
+    States: 
+      0 (Approach Waypoint), 1 (Approach Hover), 2 (Descend/Settle), 
+      3 (Spray), 4 (Retract), 5 (Complete) 
     """ 
     POSITION_THRESHOLD = 0.90 # Distance tolerance (meters) to advance state 
-    MAX_STATE_STEPS = 530 # Match the env's max episode length so timeout logic stays aligned. 
+    MAX_STATE_STEPS = 530 
 
     def __init__(self): 
         self.state = 0 
@@ -272,6 +270,7 @@ class SprayOracle:
         self.state_steps = 0 
         self.completed = False 
         self.timed_out = False 
+        self.approach_waypoint = None # <-- Store our calculated waypoint
 
     def _advance(self, next_state): 
         self.state = next_state 
@@ -288,58 +287,72 @@ class SprayOracle:
         return self._cap_vector_norm(POSITION_GAIN * error_vector, ACTION_CLAMP)
 
     def compute_action(self, ee_pos, ee_quat, hover_target):
-        """ 
-        Return a 7D action vector: 
-        [0:3] relative position delta toward the current waypoint 
-        [3:6] zero orientation delta 
-        [6] reserved for the other end-effector system 
-        """ 
         action = np.zeros(7) 
         action[6] = 0.0 
         
-        if self.state == 4:
+        # We now finish at state 5
+        if self.state == 5:
             return action
+
+        # Calculate waypoint exactly once at the start of the sequence
+        if self.approach_waypoint is None:
+            self.approach_waypoint = np.copy(hover_target)
+            # Halfway in X and Y between current pos and hover target
+            self.approach_waypoint[0] = (ee_pos[0] + hover_target[0]) / 2.0
+            self.approach_waypoint[1] = (ee_pos[1] + hover_target[1]) / 2.0
+            # Z stays at the hover_target[2] altitude automatically
         
         # 1. Orientation Command: Point straight down at the crown
         err_quat = _quat_multiply(DOWN_QUAT, _quat_conjugate(ee_quat))
         err_axis_angle = _quat_to_axis_angle(err_quat)
         action[3:6] = self._cap_vector_norm(err_axis_angle, ORIENTATION_CLAMP)
         
-        # 2. Position Command: Only use the hover position directly
-        err_to_hover = hover_target - ee_pos 
         self.state_steps += 1
 
         if self.state == 0: 
-            # Approach hover waypoint above the target 
-            action[0:3] = self._position_command(err_to_hover) 
-            if np.linalg.norm(err_to_hover) < self.POSITION_THRESHOLD: 
+            # First, go to the elevated midpoint waypoint
+            err_to_waypoint = self.approach_waypoint - ee_pos 
+            action[0:3] = self._position_command(err_to_waypoint) 
+            if np.linalg.norm(err_to_waypoint) < self.POSITION_THRESHOLD: 
                 self._advance(1) 
             elif self.state_steps >= self.MAX_STATE_STEPS: 
                 self.timed_out = True 
-                self._advance(4) 
-                
+                self._advance(5) 
+
         elif self.state == 1: 
+            # Now, approach the final hover waypoint directly above the target 
+            err_to_hover = hover_target - ee_pos 
+            action[0:3] = self._position_command(err_to_hover) 
+            if np.linalg.norm(err_to_hover) < self.POSITION_THRESHOLD: 
+                self._advance(2) 
+            elif self.state_steps >= self.MAX_STATE_STEPS: 
+                self.timed_out = True 
+                self._advance(5) 
+                
+        elif self.state == 2: 
             # HOLD position at the hover waypoint and let the downward orientation settle            
+            err_to_hover = hover_target - ee_pos 
             action[0:3] = self._position_command(err_to_hover) 
             
             # Wait for ~1 second (30 steps) to let the wrist aim perfectly before spraying
             if self.state_steps >= 30: 
                 self.spray_counter = SPRAY_DURATION 
-                self._advance(2)
+                self._advance(3)
 
-        elif self.state == 2: 
+        elif self.state == 3: 
             # Hold precise hover position and "spray"
+            err_to_hover = hover_target - ee_pos 
             action[0:3] = self._position_command(err_to_hover) 
             self.spray_counter -= 1 
             if self.spray_counter <= 0: 
-                self._advance(3)
+                self._advance(4)
                 
-        elif self.state == 3: 
+        elif self.state == 4: 
             # Retract or skip straight to complete
             self.completed = True 
-            self._advance(4)
+            self._advance(5)
 
-        return action 
+        return action
 
 
 def main(): 
@@ -514,7 +527,7 @@ def main():
 
         # Dataset Recording (Conditional)
         for env_id in range(num_envs):
-            if oracles[env_id].state < 4:
+            if oracles[env_id].state < 5:
                 if args_cli.save_data:
                     assert datasets is not None
                     img_tensor = env.unwrapped.scene["wrist_camera"].data.output["rgb"][env_id]
@@ -554,10 +567,10 @@ def main():
         # Telemetry heartbeat 
         if step % 50 == 0: 
             state_values = np.array([oracle.state for oracle in oracles], dtype=np.int64)
-            state_counts = np.bincount(state_values, minlength=5)
+            state_counts = np.bincount(state_values, minlength=6)
             print(
                 f"[STEP {step:05d}] states=0:{state_counts[0]} 1:{state_counts[1]} 2:{state_counts[2]} "
-                f"3:{state_counts[3]} 4:{state_counts[4]} | saved_frames={int(saved_frame_count.sum())}"
+                f"3:{state_counts[3]} 4:{state_counts[4]} 5:{state_counts[5]} | saved_frames={int(saved_frame_count.sum())}"
             )
             for env_id in range(num_envs):
                 prev_dist = prev_dist_to_target[env_id]
@@ -565,8 +578,8 @@ def main():
                 delta_str = "na" if np.isnan(prev_dist) else f"{curr_dist - prev_dist:+.3f}"
                 
                 err_to_hover = current_hover_targets[env_id] - ee_pos_all[env_id]
-                state_norm = float(np.linalg.norm(err_to_hover)) if oracles[env_id].state < 4 else 0.0
-                state_norm_name = "hover" if oracles[env_id].state < 4 else "done"
+                state_norm = float(np.linalg.norm(err_to_hover)) if oracles[env_id].state < 5 else 0.0
+                state_norm_name = "hover" if oracles[env_id].state < 5 else "done"
                 
                 print(
                     f"[E{env_id:04d}] s={oracles[env_id].state} steps={oracles[env_id].state_steps:03d} "
