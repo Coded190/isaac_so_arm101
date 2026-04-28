@@ -51,7 +51,7 @@ from isaaclab_tasks.utils import parse_env_cfg
 # action[6] -> absolute gripper joint target (radians), NOT a spray flag 
 ACTION_CLAMP = 0.5 # Max Cartesian delta per step (meters). Small → stable IK, larger → faster motion. 
 POSITION_GAIN = 0.75 # Proportional gain for Cartesian position tracking. 
-HOVER_OFFSET_Z = 0.15 # Debug pass: remove hover offset so state-0 and target visual can be compared directly.
+HOVER_OFFSET_Z = 0.20 # Debug pass: remove hover offset so state-0 and target visual can be compared directly.
 SPRAY_DURATION = 60 # Sim steps to "spray" at the target (~2 s at 30 Hz). 
 
 # Gripper joint targets. Since action[6] is the absolute joint position, we open 
@@ -79,7 +79,7 @@ LEAF_CULL_Z_OFFSET = 0.03 # Start culling 3 cm above the crown centroid
 LEAF_KEEP_RATIO = 0.8 # Keep 80% of the top leaves; only remove the highest 20% 
 
 # Spray target tuning, expressed as an offset from the computed crown centroid. 
-TARGET_OFFSET = np.array([0.0, 0.0, 0.30]) 
+TARGET_OFFSET = np.array([0.0, 0.0, 0.40]) 
 TASK_DESCRIPTION = "spray deterministically tracked palm crown"
 MAX_TOTAL_SAVED_FRAMES = 25000
 
@@ -171,13 +171,14 @@ def spawn_target_marker(stage, position_world, marker_path, radius=0.04, color=(
     print(f"[DEBUG] Target marker at {np.asarray(position_world).round(3)} -> {marker_path}") 
 
 
-def spawn_target_markers(stage, target_positions, env_ids=None):
-    """Spawn one target marker per environment."""
+def spawn_target_markers(stage, target_positions, env_ids=None, marker_type="spray", color=(1.0, 0.0, 0.0)):
+    """Spawn one target marker per environment for a specific type."""
     if env_ids is None:
         env_ids = range(target_positions.shape[0])
     for env_id in env_ids:
-        marker_path = f"/World/debug_target_markers/env_{env_id}"
-        spawn_target_marker(stage, target_positions[env_id], marker_path=marker_path)
+        # Include the marker_type in the path so they don't overwrite each other
+        marker_path = f"/World/debug_target_markers/{marker_type}/env_{env_id}"
+        spawn_target_marker(stage, target_positions[env_id], marker_path=marker_path, color=color)
 
 
 def set_rest_pose(env, rest_pose_tensor, env_ids=None): 
@@ -485,8 +486,15 @@ def main():
         print("[INFO]: Running in TEST MODE. Data will NOT be saved.")
 
     oracles = [SprayOracle() for _ in range(num_envs)]
-    spawn_target_markers(stage, current_spray_targets)
+    
+    # 1. Spawn Red Spray Targets
+    spawn_target_markers(stage, current_spray_targets, marker_type="spray", color=(1.0, 0.0, 0.0))
 
+    # 2. Calculate and Spawn Blue Hover Targets
+    hover_targets = current_spray_targets.copy()
+    hover_targets[:, 2] += HOVER_OFFSET_Z
+    spawn_target_markers(stage, hover_targets, marker_type="hover", color=(0.0, 0.0, 1.0))    
+    
     # Resolve the gripper body index once to avoid repeated name lookups in the hot loop. 
     moving_gripper_indices, _ = env.unwrapped.scene["robot"].find_bodies("moving_gripper") 
     moving_gripper_idx = moving_gripper_indices[0] 
@@ -637,7 +645,14 @@ def main():
                 oracles[env_id] = SprayOracle()
                 episode_frame_count[env_id] = 0
                 prev_dist_to_target[env_id] = np.nan
-            spawn_target_markers(stage, current_spray_targets, env_ids=done_env_ids)
+            
+            # 1. Refresh Red Spray Targets
+            spawn_target_markers(stage, current_spray_targets, env_ids=done_env_ids, marker_type="spray", color=(1.0, 0.0, 0.0))
+
+            # 2. Calculate and Refresh Blue Hover Targets
+            hover_targets = current_spray_targets.copy()
+            hover_targets[:, 2] += HOVER_OFFSET_Z
+            spawn_target_markers(stage, hover_targets, env_ids=done_env_ids, marker_type="hover", color=(0.0, 0.0, 1.0))
 
     if args_cli.save_data and datasets is not None:
         for env_id in range(num_envs):
