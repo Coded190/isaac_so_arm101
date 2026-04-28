@@ -51,7 +51,7 @@ from isaaclab_tasks.utils import parse_env_cfg
 # action[6] -> absolute gripper joint target (radians), NOT a spray flag 
 ACTION_CLAMP = 0.5 # Max Cartesian delta per step (meters). Small → stable IK, larger → faster motion. 
 POSITION_GAIN = 0.75 # Proportional gain for Cartesian position tracking. 
-HOVER_OFFSET_Z = 0.0 # Debug pass: remove hover offset so state-0 and target visual can be compared directly. Was 0.13
+HOVER_OFFSET_Z = 0.15 # Debug pass: remove hover offset so state-0 and target visual can be compared directly.
 SPRAY_DURATION = 60 # Sim steps to "spray" at the target (~2 s at 30 Hz). 
 
 # Gripper joint targets. Since action[6] is the absolute joint position, we open 
@@ -263,7 +263,7 @@ class SprayOracle:
 
     States: 0 (Approach Hover), 1 (Descend), 2 (Spray), 3 (Retract), 4 (Complete) 
     """ 
-    POSITION_THRESHOLD = 0.05 # Distance tolerance (meters) to advance state 
+    POSITION_THRESHOLD = 0.20 # Distance tolerance (meters) to advance state 
     MAX_STATE_STEPS = 430 # Match the env's max episode length so timeout logic stays aligned. 
 
     def __init__(self): 
