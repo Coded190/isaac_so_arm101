@@ -261,7 +261,7 @@ class SprayOracle:
       0 (Approach Waypoint), 1 (Approach Hover), 2 (Descend/Settle), 
       3 (Spray), 4 (Success Hold), 5 (Fail Hold) 
     """ 
-    POSITION_THRESHOLD = 0.90 # Distance tolerance (meters) to advance state 
+    POSITION_THRESHOLD = 0.50 # Distance tolerance (meters) to advance state 
     MAX_STATE_STEPS = 530 
 
     def __init__(self): 
