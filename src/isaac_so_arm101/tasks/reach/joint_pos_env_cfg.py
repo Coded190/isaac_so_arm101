@@ -216,7 +216,7 @@ class ReachVlaEnvCfg(PingTiReachEnvCfg):
         self.actions.arm_action = DifferentialInverseKinematicsActionCfg(
             asset_name="robot", 
             joint_names=["base_yaw", "shoulder_pitch", "elbow_pitch", "wrist_pitch", "wrist_roll"],
-            body_name="sts3215_gripper", # EXACT match from URDF for the 5th joint's child link
+            body_name="moving_gripper", # Match the oracle/telemetry frame used in vla_data_gen.py
             controller=DifferentialIKControllerCfg(
                 command_type="pose", 
                 use_relative_mode=True, 

@@ -51,7 +51,7 @@ from isaaclab_tasks.utils import parse_env_cfg
 # action[6] -> absolute gripper joint target (radians), NOT a spray flag 
 ACTION_CLAMP = 0.5 # Max Cartesian delta per step (meters). Small → stable IK, larger → faster motion. 
 POSITION_GAIN = 0.75 # Proportional gain for Cartesian position tracking. 
-HOVER_OFFSET_Z = 0.13 # Vertical offset above the target for the approach waypoint. 
+HOVER_OFFSET_Z = 0.0 # Debug pass: remove hover offset so state-0 and target visual can be compared directly. Was 0.13
 SPRAY_DURATION = 60 # Sim steps to "spray" at the target (~2 s at 30 Hz). 
 
 # Gripper joint targets. Since action[6] is the absolute joint position, we open 
@@ -488,8 +488,10 @@ def main():
     spawn_target_markers(stage, current_spray_targets)
 
     # Resolve the gripper body index once to avoid repeated name lookups in the hot loop. 
-    gripper_indices, _ = env.unwrapped.scene["robot"].find_bodies("moving_gripper") 
-    gripper_idx = gripper_indices[0] 
+    moving_gripper_indices, _ = env.unwrapped.scene["robot"].find_bodies("moving_gripper") 
+    moving_gripper_idx = moving_gripper_indices[0] 
+    sts3215_gripper_indices, _ = env.unwrapped.scene["robot"].find_bodies("sts3215_gripper") 
+    sts3215_gripper_idx = sts3215_gripper_indices[0] 
 
     step = 0 
     episode_frame_count = np.zeros(num_envs, dtype=np.int64)
@@ -499,8 +501,9 @@ def main():
     print("[INFO]: Starting Oracle Data Generation Loop...") 
     while simulation_app.is_running(): 
         # State Extraction 
-        ee_pos_all = env.unwrapped.scene["robot"].data.body_pos_w[:, gripper_idx].cpu().numpy() 
-        ee_quat_all = env.unwrapped.scene["robot"].data.body_quat_w[:, gripper_idx].cpu().numpy() 
+        ee_pos_all = env.unwrapped.scene["robot"].data.body_pos_w[:, moving_gripper_idx].cpu().numpy() 
+        ee_quat_all = env.unwrapped.scene["robot"].data.body_quat_w[:, moving_gripper_idx].cpu().numpy() 
+        sts3215_ee_pos_all = env.unwrapped.scene["robot"].data.body_pos_w[:, sts3215_gripper_idx].cpu().numpy() 
         joint_positions_all = env.unwrapped.scene["robot"].data.joint_pos.cpu().numpy() 
         dist_to_target_all = np.linalg.norm(current_spray_targets - ee_pos_all, axis=1)
 
@@ -565,9 +568,27 @@ def main():
                 prev_dist = prev_dist_to_target[env_id]
                 curr_dist = float(dist_to_target_all[env_id])
                 delta_str = "na" if np.isnan(prev_dist) else f"{curr_dist - prev_dist:+.3f}"
+                hover_pos = current_spray_targets[env_id].copy()
+                hover_pos[2] += HOVER_OFFSET_Z
+                err_to_hover = hover_pos - ee_pos_all[env_id]
+                err_to_target = current_spray_targets[env_id] - ee_pos_all[env_id]
+                if oracles[env_id].state == 0:
+                    state_norm = float(np.linalg.norm(err_to_hover))
+                    state_norm_name = "hover"
+                elif oracles[env_id].state in (1, 2):
+                    state_norm = float(np.linalg.norm(err_to_target))
+                    state_norm_name = "target"
+                elif oracles[env_id].state == 3:
+                    state_norm = float(np.linalg.norm(err_to_hover))
+                    state_norm_name = "hover"
+                else:
+                    state_norm = 0.0
+                    state_norm_name = "done"
                 print(
                     f"[E{env_id:04d}] s={oracles[env_id].state} steps={oracles[env_id].state_steps:03d} "
-                    f"dist={curr_dist:.3f} d_dist={delta_str}"
+                    f"dist_moving->target={curr_dist:.3f} dist_sts3215->target={np.linalg.norm(current_spray_targets[env_id] - sts3215_ee_pos_all[env_id]):.3f} "
+                    f"dist_moving->hover={np.linalg.norm(hover_pos - ee_pos_all[env_id]):.3f} "
+                    f"state_norm({state_norm_name})={state_norm:.3f} d_dist={delta_str}"
                 )
             prev_dist_to_target[:] = dist_to_target_all
 
@@ -575,7 +596,7 @@ def main():
         obs, _, terminated, truncated, _ = env.step(action_tensor)
         step += 1 
 
-        terminated_t = torch.as_tensor(terminated, device=sim_device, dtype=torch.bool)
+        terminated_t = torch.as_tensor(terminated, devicwawawwwe=sim_device, dtype=torch.bool)
         truncated_t = torch.as_tensor(truncated, device=sim_device, dtype=torch.bool)
         done_mask = torch.logical_or(terminated_t, truncated_t).reshape(-1)
         done_env_ids_t = torch.nonzero(done_mask, as_tuple=False).squeeze(-1)
