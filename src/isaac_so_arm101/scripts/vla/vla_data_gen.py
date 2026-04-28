@@ -51,7 +51,6 @@ from isaaclab_tasks.utils import parse_env_cfg
 # action[6] -> absolute gripper joint target (radians), NOT a spray flag 
 ACTION_CLAMP = 0.5 # Max Cartesian delta per step (meters). Small → stable IK, larger → faster motion. 
 POSITION_GAIN = 0.75 # Proportional gain for Cartesian position tracking. 
-HOVER_OFFSET_Z = 0.05 # Debug pass: remove hover offset so state-0 and target visual can be compared directly.
 SPRAY_DURATION = 60 # Sim steps to "spray" at the target (~2 s at 30 Hz). 
 
 # Gripper joint targets. Since action[6] is the absolute joint position, we open 
@@ -79,7 +78,7 @@ LEAF_CULL_Z_OFFSET = 0.03 # Start culling 3 cm above the crown centroid
 LEAF_KEEP_RATIO = 0.8 # Keep 80% of the top leaves; only remove the highest 20% 
 
 # Spray target tuning, expressed as an offset from the computed crown centroid. 
-TARGET_OFFSET = np.array([0.0, 0.0, 0.30]) 
+HOVER_OFFSET = np.array([0.0, 0.0, 0.35]) # Crown centroid + 35cm Z-height
 TASK_DESCRIPTION = "spray deterministically tracked palm crown"
 MAX_TOTAL_SAVED_FRAMES = 25000
 
@@ -196,7 +195,7 @@ def set_rest_pose(env, rest_pose_tensor, env_ids=None):
     robot.write_joint_state_to_sim(joint_pos, zero_vel, env_ids=env_ids_t)
 
 
-def get_deterministic_target(stage, palm_root_path, offset=TARGET_OFFSET): 
+def get_deterministic_target(stage, palm_root_path, offset=HOVER_OFFSET): 
     """ 
     Compute the spray target from the current palm crown centroid plus a 
     configurable offset. Re-reading the stage means the target tracks the 
@@ -264,8 +263,8 @@ class SprayOracle:
 
     States: 0 (Approach Hover), 1 (Descend), 2 (Spray), 3 (Retract), 4 (Complete) 
     """ 
-    POSITION_THRESHOLD = 0.20 # Distance tolerance (meters) to advance state 
-    MAX_STATE_STEPS = 430 # Match the env's max episode length so timeout logic stays aligned. 
+    POSITION_THRESHOLD = 0.90 # Distance tolerance (meters) to advance state 
+    MAX_STATE_STEPS = 530 # Match the env's max episode length so timeout logic stays aligned. 
 
     def __init__(self): 
         self.state = 0 
@@ -274,7 +273,7 @@ class SprayOracle:
         self.completed = False 
         self.timed_out = False 
 
-    def _advance(self, next_state): 
+def _advance(self, next_state): 
         self.state = next_state 
         self.state_steps = 0 
 
@@ -288,7 +287,7 @@ class SprayOracle:
     def _position_command(self, error_vector):
         return self._cap_vector_norm(POSITION_GAIN * error_vector, ACTION_CLAMP)
 
-    def compute_action(self, ee_pos, ee_quat, spray_target):
+    def compute_action(self, ee_pos, ee_quat, hover_target):
         """ 
         Return a 7D action vector: 
         [0:3] relative position delta toward the current waypoint 
@@ -298,17 +297,17 @@ class SprayOracle:
         action = np.zeros(7) 
         action[6] = 0.0 
         
-        # Compute dynamic orientation correction
+        if self.state == 4:
+            return action
+        
+        # 1. Orientation Command: Point straight down at the crown
         err_quat = _quat_multiply(DOWN_QUAT, _quat_conjugate(ee_quat))
         err_axis_angle = _quat_to_axis_angle(err_quat)
         action[3:6] = self._cap_vector_norm(err_axis_angle, ORIENTATION_CLAMP)
         
-        hover_pos = spray_target.copy() 
-        hover_pos[2] += HOVER_OFFSET_Z 
-
-        err_to_hover = hover_pos - ee_pos 
-        err_to_target = spray_target - ee_pos 
-        self.state_steps += 1 
+        # 2. Position Command: Only use the hover position directly
+        err_to_hover = hover_target - ee_pos 
+        self.state_steps += 1
 
         if self.state == 0: 
             # Approach hover waypoint above the target 
@@ -318,31 +317,27 @@ class SprayOracle:
             elif self.state_steps >= self.MAX_STATE_STEPS: 
                 self.timed_out = True 
                 self._advance(4) 
+                
         elif self.state == 1: 
-            # Descend to the target 
-            action[0:3] = self._position_command(err_to_target) 
-            if np.linalg.norm(err_to_target) < self.POSITION_THRESHOLD: 
+            # HOLD position at the hover waypoint and let the downward orientation settle            
+            action[0:3] = self._position_command(err_to_hover) 
+            
+            # Wait for ~1 second (30 steps) to let the wrist aim perfectly before spraying
+            if self.state_steps >= 30: 
                 self.spray_counter = SPRAY_DURATION 
-                self._advance(2) 
-            elif self.state_steps >= self.MAX_STATE_STEPS: 
-                self.timed_out = True 
-                self.spray_counter = SPRAY_DURATION 
-                self._advance(4) 
+                self._advance(2)
+
         elif self.state == 2: 
-            # Hold position and "spray" by opening the gripper 
-            action[0:3] = self._position_command(err_to_target) 
+            # Hold precise hover position and "spray"
+            action[0:3] = self._position_command(err_to_hover) 
             self.spray_counter -= 1 
             if self.spray_counter <= 0: 
-                self._advance(3) 
+                self._advance(3)
+                
         elif self.state == 3: 
-            # Retract back to the hover waypoint 
-            action[0:3] = self._position_command(err_to_hover) 
-            if np.linalg.norm(err_to_hover) < self.POSITION_THRESHOLD: 
-                self.completed = True 
-                self._advance(4) 
-            elif self.state_steps >= self.MAX_STATE_STEPS: 
-                self.timed_out = True 
-                self._advance(4) 
+            # Retract or skip straight to complete
+            self.completed = True 
+            self._advance(4)
 
         return action 
 
@@ -373,7 +368,7 @@ def main():
     
     # Extend the maximum episode length (e.g., to 15 seconds) so the 
     # SprayOracle FSM has enough time to reach the target before the environment resets.
-    env_cfg.episode_length_s = 15.0
+    env_cfg.episode_length_s = 18.33
     
     env = gym.make(args_cli.task, cfg=env_cfg) 
 
@@ -417,8 +412,8 @@ def main():
     REST_POSE = torch.tensor(rest_vals, device=sim_device, dtype=torch.float32).unsqueeze(0) 
 
     # Compute the crown centroid once from the pristine stage. 
-    current_spray_targets = np.zeros((num_envs, 3), dtype=np.float32)
-    current_spray_targets[:] = prepare_episode_targets(
+    current_hover_targets = np.zeros((num_envs, 3), dtype=np.float32)
+    current_hover_targets[:] = prepare_episode_targets(
         stage=stage,
         palm_root_paths=palm_root_paths,
         episode_rng=episode_rng,
@@ -487,19 +482,12 @@ def main():
 
     oracles = [SprayOracle() for _ in range(num_envs)]
     
-    # 1. Spawn Red Spray Targets
-    spawn_target_markers(stage, current_spray_targets, marker_type="spray", color=(1.0, 0.0, 0.0))
-
-    # 2. Calculate and Spawn Blue Hover Targets
-    hover_targets = current_spray_targets.copy()
-    hover_targets[:, 2] += HOVER_OFFSET_Z
-    spawn_target_markers(stage, hover_targets, marker_type="hover", color=(0.0, 0.0, 1.0))    
+    # Spawn Blue Hover Targets
+    spawn_target_markers(stage, current_hover_targets, marker_type="hover", color=(0.0, 0.0, 1.0))  
     
     # Resolve the gripper body index once to avoid repeated name lookups in the hot loop. 
     moving_gripper_indices, _ = env.unwrapped.scene["robot"].find_bodies("moving_gripper") 
     moving_gripper_idx = moving_gripper_indices[0] 
-    sts3215_gripper_indices, _ = env.unwrapped.scene["robot"].find_bodies("sts3215_gripper") 
-    sts3215_gripper_idx = sts3215_gripper_indices[0] 
 
     step = 0 
     episode_frame_count = np.zeros(num_envs, dtype=np.int64)
@@ -511,14 +499,13 @@ def main():
         # State Extraction 
         ee_pos_all = env.unwrapped.scene["robot"].data.body_pos_w[:, moving_gripper_idx].cpu().numpy() 
         ee_quat_all = env.unwrapped.scene["robot"].data.body_quat_w[:, moving_gripper_idx].cpu().numpy() 
-        sts3215_ee_pos_all = env.unwrapped.scene["robot"].data.body_pos_w[:, sts3215_gripper_idx].cpu().numpy() 
         joint_positions_all = env.unwrapped.scene["robot"].data.joint_pos.cpu().numpy() 
-        dist_to_target_all = np.linalg.norm(current_spray_targets - ee_pos_all, axis=1)
+        dist_to_target_all = np.linalg.norm(current_hover_targets - ee_pos_all, axis=1)
 
         # Action Computation 
         action_batch = np.zeros((num_envs, 7), dtype=np.float32)
         for env_id in range(num_envs):
-            env_action = oracles[env_id].compute_action(ee_pos_all[env_id], ee_quat_all[env_id], current_spray_targets[env_id])
+            env_action = oracles[env_id].compute_action(ee_pos_all[env_id], ee_quat_all[env_id], hover_target=current_hover_targets[env_id])
             env_action[:3] = np.clip(env_action[:3], -ACTION_CLAMP, ACTION_CLAMP)
             action_batch[env_id] = env_action
 
@@ -576,26 +563,14 @@ def main():
                 prev_dist = prev_dist_to_target[env_id]
                 curr_dist = float(dist_to_target_all[env_id])
                 delta_str = "na" if np.isnan(prev_dist) else f"{curr_dist - prev_dist:+.3f}"
-                hover_pos = current_spray_targets[env_id].copy()
-                hover_pos[2] += HOVER_OFFSET_Z
-                err_to_hover = hover_pos - ee_pos_all[env_id]
-                err_to_target = current_spray_targets[env_id] - ee_pos_all[env_id]
-                if oracles[env_id].state == 0:
-                    state_norm = float(np.linalg.norm(err_to_hover))
-                    state_norm_name = "hover"
-                elif oracles[env_id].state in (1, 2):
-                    state_norm = float(np.linalg.norm(err_to_target))
-                    state_norm_name = "target"
-                elif oracles[env_id].state == 3:
-                    state_norm = float(np.linalg.norm(err_to_hover))
-                    state_norm_name = "hover"
-                else:
-                    state_norm = 0.0
-                    state_norm_name = "done"
+                
+                err_to_hover = current_hover_targets[env_id] - ee_pos_all[env_id]
+                state_norm = float(np.linalg.norm(err_to_hover)) if oracles[env_id].state < 4 else 0.0
+                state_norm_name = "hover" if oracles[env_id].state < 4 else "done"
+                
                 print(
                     f"[E{env_id:04d}] s={oracles[env_id].state} steps={oracles[env_id].state_steps:03d} "
-                    f"dist_moving->target={curr_dist:.3f} dist_sts3215->target={np.linalg.norm(current_spray_targets[env_id] - sts3215_ee_pos_all[env_id]):.3f} "
-                    f"dist_moving->hover={np.linalg.norm(hover_pos - ee_pos_all[env_id]):.3f} "
+                    f"dist_moving->hover={np.linalg.norm(err_to_hover):.3f} "
                     f"state_norm({state_norm_name})={state_norm:.3f} d_dist={delta_str}"
                 )
             prev_dist_to_target[:] = dist_to_target_all
@@ -641,18 +616,12 @@ def main():
                 env_ids=done_env_ids,
             )
             for i, env_id in enumerate(done_env_ids):
-                current_spray_targets[env_id] = refreshed_targets[i]
+                current_hover_targets[env_id] = refreshed_targets[i] 
                 oracles[env_id] = SprayOracle()
                 episode_frame_count[env_id] = 0
-                prev_dist_to_target[env_id] = np.nan
             
-            # 1. Refresh Red Spray Targets
-            spawn_target_markers(stage, current_spray_targets, env_ids=done_env_ids, marker_type="spray", color=(1.0, 0.0, 0.0))
-
-            # 2. Calculate and Refresh Blue Hover Targets
-            hover_targets = current_spray_targets.copy()
-            hover_targets[:, 2] += HOVER_OFFSET_Z
-            spawn_target_markers(stage, hover_targets, env_ids=done_env_ids, marker_type="hover", color=(0.0, 0.0, 1.0))
+            # Refresh Blue Hover Targets
+            spawn_target_markers(stage, current_hover_targets, env_ids=done_env_ids, marker_type="hover", color=(0.0, 0.0, 1.0))
 
     if args_cli.save_data and datasets is not None:
         for env_id in range(num_envs):
