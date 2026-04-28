@@ -51,7 +51,7 @@ from isaaclab_tasks.utils import parse_env_cfg
 # action[6] -> absolute gripper joint target (radians), NOT a spray flag 
 ACTION_CLAMP = 0.5 # Max Cartesian delta per step (meters). Small → stable IK, larger → faster motion. 
 POSITION_GAIN = 0.75 # Proportional gain for Cartesian position tracking. 
-HOVER_OFFSET_Z = 0.20 # Debug pass: remove hover offset so state-0 and target visual can be compared directly.
+HOVER_OFFSET_Z = 0.05 # Debug pass: remove hover offset so state-0 and target visual can be compared directly.
 SPRAY_DURATION = 60 # Sim steps to "spray" at the target (~2 s at 30 Hz). 
 
 # Gripper joint targets. Since action[6] is the absolute joint position, we open 
@@ -79,7 +79,7 @@ LEAF_CULL_Z_OFFSET = 0.03 # Start culling 3 cm above the crown centroid
 LEAF_KEEP_RATIO = 0.8 # Keep 80% of the top leaves; only remove the highest 20% 
 
 # Spray target tuning, expressed as an offset from the computed crown centroid. 
-TARGET_OFFSET = np.array([0.0, 0.0, 0.40]) 
+TARGET_OFFSET = np.array([0.0, 0.0, 0.20]) 
 TASK_DESCRIPTION = "spray deterministically tracked palm crown"
 MAX_TOTAL_SAVED_FRAMES = 25000
 
