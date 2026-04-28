@@ -259,7 +259,7 @@ class SprayOracle:
     Finite State Machine (FSM) producing expert actions for VLA dataset collection. 
     States: 
       0 (Approach Waypoint), 1 (Approach Hover), 2 (Descend/Settle), 
-      3 (Spray), 4 (Retract), 5 (Complete) 
+      3 (Spray), 4 (Success Hold), 5 (Fail Hold) 
     """ 
     POSITION_THRESHOLD = 0.90 # Distance tolerance (meters) to advance state 
     MAX_STATE_STEPS = 530 
@@ -270,7 +270,8 @@ class SprayOracle:
         self.state_steps = 0 
         self.completed = False 
         self.timed_out = False 
-        self.approach_waypoint = None # <-- Store our calculated waypoint
+        self.approach_waypoint = None
+        self.fail_pos = None # Anchor point to prevent drift upon failure
 
     def _advance(self, next_state): 
         self.state = next_state 
@@ -289,20 +290,14 @@ class SprayOracle:
     def compute_action(self, ee_pos, ee_quat, hover_target):
         action = np.zeros(7) 
         action[6] = 0.0 
-        
-        # We now finish at state 5
-        if self.state == 5:
-            return action
 
         # Calculate waypoint exactly once at the start of the sequence
         if self.approach_waypoint is None:
             self.approach_waypoint = np.copy(hover_target)
-            # Halfway in X and Y between current pos and hover target
             self.approach_waypoint[0] = (ee_pos[0] + hover_target[0]) / 2.0
             self.approach_waypoint[1] = (ee_pos[1] + hover_target[1]) / 2.0
-            # Z stays at the hover_target[2] altitude automatically
         
-        # 1. Orientation Command: Point straight down at the crown
+        # Always maintain downward orientation to prevent wrist drift
         err_quat = _quat_multiply(DOWN_QUAT, _quat_conjugate(ee_quat))
         err_axis_angle = _quat_to_axis_angle(err_quat)
         action[3:6] = self._cap_vector_norm(err_axis_angle, ORIENTATION_CLAMP)
@@ -310,47 +305,49 @@ class SprayOracle:
         self.state_steps += 1
 
         if self.state == 0: 
-            # First, go to the elevated midpoint waypoint
             err_to_waypoint = self.approach_waypoint - ee_pos 
             action[0:3] = self._position_command(err_to_waypoint) 
             if np.linalg.norm(err_to_waypoint) < self.POSITION_THRESHOLD: 
                 self._advance(1) 
             elif self.state_steps >= self.MAX_STATE_STEPS: 
                 self.timed_out = True 
+                self.fail_pos = np.copy(ee_pos) # Lock the failed position
                 self._advance(5) 
 
         elif self.state == 1: 
-            # Now, approach the final hover waypoint directly above the target 
             err_to_hover = hover_target - ee_pos 
             action[0:3] = self._position_command(err_to_hover) 
             if np.linalg.norm(err_to_hover) < self.POSITION_THRESHOLD: 
                 self._advance(2) 
             elif self.state_steps >= self.MAX_STATE_STEPS: 
                 self.timed_out = True 
+                self.fail_pos = np.copy(ee_pos) # Lock the failed position
                 self._advance(5) 
                 
         elif self.state == 2: 
-            # HOLD position at the hover waypoint and let the downward orientation settle            
             err_to_hover = hover_target - ee_pos 
             action[0:3] = self._position_command(err_to_hover) 
-            
-            # Wait for ~1 second (30 steps) to let the wrist aim perfectly before spraying
             if self.state_steps >= 30: 
                 self.spray_counter = SPRAY_DURATION 
                 self._advance(3)
 
         elif self.state == 3: 
-            # Hold precise hover position and "spray"
             err_to_hover = hover_target - ee_pos 
             action[0:3] = self._position_command(err_to_hover) 
             self.spray_counter -= 1 
             if self.spray_counter <= 0: 
-                self._advance(4)
+                self.completed = True 
+                self._advance(4) # Move to Success Hold
                 
         elif self.state == 4: 
-            # Retract or skip straight to complete
-            self.completed = True 
-            self._advance(5)
+            # Success Hold: actively track the hover target to fight gravity sag
+            err_to_hover = hover_target - ee_pos 
+            action[0:3] = self._position_command(err_to_hover) 
+
+        elif self.state == 5:
+            # Fail Hold: actively track the exact spot where it failed to fight gravity sag
+            err_to_fail = self.fail_pos - ee_pos
+            action[0:3] = self._position_command(err_to_fail)
 
         return action
 
@@ -527,7 +524,7 @@ def main():
 
         # Dataset Recording (Conditional)
         for env_id in range(num_envs):
-            if oracles[env_id].state < 5:
+            if oracles[env_id].state < 4: # Only save frames during active approach/spray phases, not the hold states
                 if args_cli.save_data:
                     assert datasets is not None
                     img_tensor = env.unwrapped.scene["wrist_camera"].data.output["rgb"][env_id]
@@ -570,7 +567,7 @@ def main():
             state_counts = np.bincount(state_values, minlength=6)
             print(
                 f"[STEP {step:05d}] states=0:{state_counts[0]} 1:{state_counts[1]} 2:{state_counts[2]} "
-                f"3:{state_counts[3]} 4:{state_counts[4]} 5:{state_counts[5]} | saved_frames={int(saved_frame_count.sum())}"
+                f"3:{state_counts[3]} 4(Succ):{state_counts[4]} 5(Fail):{state_counts[5]} | saved_frames={int(saved_frame_count.sum())}"
             )
             for env_id in range(num_envs):
                 prev_dist = prev_dist_to_target[env_id]
@@ -578,8 +575,16 @@ def main():
                 delta_str = "na" if np.isnan(prev_dist) else f"{curr_dist - prev_dist:+.3f}"
                 
                 err_to_hover = current_hover_targets[env_id] - ee_pos_all[env_id]
-                state_norm = float(np.linalg.norm(err_to_hover)) if oracles[env_id].state < 5 else 0.0
-                state_norm_name = "hover" if oracles[env_id].state < 5 else "done"
+                
+                if oracles[env_id].state < 4:
+                    state_norm = float(np.linalg.norm(err_to_hover))
+                    state_norm_name = "hover"
+                elif oracles[env_id].state == 4:
+                    state_norm = 0.0
+                    state_norm_name = "success"
+                else:
+                    state_norm = 0.0
+                    state_norm_name = "fail"
                 
                 print(
                     f"[E{env_id:04d}] s={oracles[env_id].state} steps={oracles[env_id].state_steps:03d} "
