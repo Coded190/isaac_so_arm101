@@ -316,7 +316,7 @@ class SprayOracle:
                 self._advance(1) 
             elif self.state_steps >= self.MAX_STATE_STEPS: 
                 self.timed_out = True 
-                self._advance(1) 
+                self._advance(4) 
         elif self.state == 1: 
             # Descend to the target 
             action[0:3] = self._position_command(err_to_target) 
@@ -326,7 +326,7 @@ class SprayOracle:
             elif self.state_steps >= self.MAX_STATE_STEPS: 
                 self.timed_out = True 
                 self.spray_counter = SPRAY_DURATION 
-                self._advance(2) 
+                self._advance(4) 
         elif self.state == 2: 
             # Hold position and "spray" by opening the gripper 
             action[0:3] = self._position_command(err_to_target) 
@@ -596,7 +596,7 @@ def main():
         obs, _, terminated, truncated, _ = env.step(action_tensor)
         step += 1 
 
-        terminated_t = torch.as_tensor(terminated, devicwawawwwe=sim_device, dtype=torch.bool)
+        terminated_t = torch.as_tensor(terminated, device=sim_device, dtype=torch.bool)
         truncated_t = torch.as_tensor(truncated, device=sim_device, dtype=torch.bool)
         done_mask = torch.logical_or(terminated_t, truncated_t).reshape(-1)
         done_env_ids_t = torch.nonzero(done_mask, as_tuple=False).squeeze(-1)
