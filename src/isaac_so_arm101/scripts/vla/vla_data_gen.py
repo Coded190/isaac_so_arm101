@@ -454,6 +454,11 @@ def main():
                 "shape": (1,),
                 "names": None,
             },
+            "language_instruction": {
+                "dtype": "string",
+                "shape": (1,),
+                "names": None,
+            }, 
             "observation.state": { 
                 "dtype": "float32", 
                 "shape": (num_dof,), 
@@ -486,7 +491,10 @@ def main():
                 features=features,
             )
             datasets.append(env_dataset)
-        print(f"[INFO]: Initialized {num_envs} per-env LeRobot datasets under {args_cli.dataset_root}.") 
+        
+        abs_save_path = os.path.abspath(args_cli.dataset_root)
+        print(f"[INFO]: Initialized {num_envs} per-env LeRobot datasets.")
+        print(f"[INFO]: >>> SAVING DATA TO DIRECTORY: {abs_save_path} <<<")
     else:
         print("[INFO]: Running in TEST MODE. Data will NOT be saved.")
 
@@ -541,7 +549,7 @@ def main():
                         "observation.state": joint_positions_all[env_id].astype(np.float32),
                         "observation.state.ee_pose": ee_pose_env.astype(np.float32),
                         "observation.images.wrist_camera": Image.fromarray(img_rgb),
-                        "task": f"{TASK_DESCRIPTION} | env={env_id:04d}",
+                        "language_instruction": TASK_DESCRIPTION,
                         "action": action_batch[env_id].astype(np.float32),
                     }
                     datasets[env_id].add_frame(frame_dict)
@@ -555,7 +563,9 @@ def main():
                     if datasets[env_id].has_pending_frames():
                         datasets[env_id].clear_episode_buffer()
                     datasets[env_id].finalize()
-                print(f"[INFO]: Collected {total_saved_frames} high-quality frames across all envs. Shutting down.") 
+                abs_save_path = os.path.abspath(args_cli.dataset_root)
+                print(f"[INFO]: Collected {total_saved_frames} high-quality frames.")
+                print(f"[INFO]: >>> DATA SUCCESSFULLY SAVED TO: {abs_save_path} <<<")
             else:
                 print(f"[INFO]: Reached {step} test frames! Shutting down.") 
             simulation_app.close() 
