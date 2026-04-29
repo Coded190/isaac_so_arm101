@@ -55,41 +55,35 @@ def merge_datasets(input_root, output_root, repo_id):
 
         # 4. Iterate through episodes in the source dataset
         for ep_idx in range(ds.num_episodes):
-            frame_idxs = ds.episode_data_index["from"][ep_idx] : ds.episode_data_index["to"][ep_idx]
+            # Calculate the range of frame indices for this episode
+            start_idx = ds.episode_data_index["from"][ep_idx].item()
+            end_idx = ds.episode_data_index["to"][ep_idx].item()
             
-            print(f"Processing {env_name} episode {ep_idx}...")
+            print(f"Processing {env_name} episode {ep_idx} (indices {start_idx} to {end_idx})...")
 
             # 5. Add all frames to the merged dataset
-            for i in frame_idxs.tolist():
-                # This call triggers video decoding but may skip string features like 'task'
+            for i in range(start_idx, end_idx):
+                # Fetch frame (decoded images/tensors)
                 frame = ds[i]
                 
                 # Prepare a frame dictionary for add_frame
                 frame_dict = {}
                 for key in features:
-                    # 1. Try to get the value from the 'frame' dictionary (tensors/images)
+                    # Logic to handle both tensors and string metadata (like 'task')
                     if key in frame:
                         val = frame[key]
-                    # 2. Fallback: Get it from the raw underlying Hugging Face dataset (strings/metadata)
                     elif key in ds.hf_dataset.column_names:
                         val = ds.hf_dataset[i][key]
                     else:
-                        print(f"[WARN] Feature '{key}' not found in frame {i} of {env_name}")
                         continue
                     
-                    # Convert tensors to numpy as expected by add_frame
+                    # Convert tensors to numpy arrays with the expected shape
                     if isinstance(val, torch.Tensor):
                         val_np = val.numpy()
-                        # Ensure we match the shape defined in features
-                        if val_np.ndim > 0 and val_np.shape[0] == 1 and features[key]["shape"] == (1,):
-                            frame_dict[key] = val_np
-                        else:
-                            frame_dict[key] = val_np.reshape(features[key]["shape"])
+                        frame_dict[key] = val_np.reshape(features[key]["shape"])
                     else:
-                        # This handles the 'task' string and other non-tensor types
                         frame_dict[key] = val
                 
-                # This will now pass validation because 'task' is included in frame_dict
                 merged_dataset.add_frame(frame_dict)
             
             # Save the episode chunk to disk
