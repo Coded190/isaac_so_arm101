@@ -6,14 +6,17 @@ def push_to_hf(hf_username, dataset_name):
     hub_repo_id = f"{hf_username}/{dataset_name}"
     
     print(f"Loading local dataset: {local_repo_id}...")
-    # Load the local dataset we just created
     ds = LeRobotDataset(local_repo_id)
     
     print(f"Pushing to Hugging Face at: {hub_repo_id}...")
     print("This may take a while depending on the size of your videos and your internet connection.")
     
-    # Push to Hugging Face
-    ds.push_to_hub(hub_repo_id)
+    # --- THE FIX: Overwrite the dataset's internal repo_id ---
+    ds.repo_id = hub_repo_id 
+    
+    # Push to Hugging Face (no arguments needed, it uses ds.repo_id)
+    ds.push_to_hub()
+    # ---------------------------------------------------------
     
     print(f"\n[SUCCESS] Dataset uploaded to: https://huggingface.co/datasets/{hub_repo_id}")
 
