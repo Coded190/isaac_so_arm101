@@ -4,6 +4,9 @@
 # This ensures that if the data generation fails, it doesn't try to merge an empty/broken dataset.
 set -e
 
+# Clean up old dataset folders before starting
+rm -rf outputs/vla_palm_dataset outputs/vla_palm_dataset_merged
+
 echo "============================================================"
 echo "[STEP 1] Running Data Generation..."
 echo "============================================================"
