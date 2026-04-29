@@ -55,29 +55,33 @@ def merge_datasets(input_root, output_root, repo_id):
 
         # 4. Iterate through episodes in the source dataset
         for ep_idx in range(ds.num_episodes):
-            # Calculate the range of frame indices for this episode
-            start_idx = ds.episode_data_index["from"][ep_idx].item()
-            end_idx = ds.episode_data_index["to"][ep_idx].item()
+            # The official way to get episode boundaries in LeRobot v2.1+:
+            # Note: these keys are now 'dataset_from_index' and 'dataset_to_index'
+            start_idx = ds.meta.episodes["dataset_from_index"][ep_idx]
+            end_idx = ds.meta.episodes["dataset_to_index"][ep_idx]
             
             print(f"Processing {env_name} episode {ep_idx} (indices {start_idx} to {end_idx})...")
 
             # 5. Add all frames to the merged dataset
+            # Note: range(start, end) is exclusive of 'end'. 
+            # In LeRobot, dataset_to_index is the exclusive upper bound (total frames).
             for i in range(start_idx, end_idx):
-                # Fetch frame (decoded images/tensors)
+                # This call triggers video decoding
                 frame = ds[i]
                 
                 # Prepare a frame dictionary for add_frame
                 frame_dict = {}
                 for key in features:
-                    # Logic to handle both tensors and string metadata (like 'task')
+                    # 1. Try to get value from 'frame' (decoded tensors/images)
                     if key in frame:
                         val = frame[key]
+                    # 2. Fallback to raw dataset for strings like 'task'
                     elif key in ds.hf_dataset.column_names:
                         val = ds.hf_dataset[i][key]
                     else:
                         continue
                     
-                    # Convert tensors to numpy arrays with the expected shape
+                    # Ensure tensors are converted to numpy with correct shape
                     if isinstance(val, torch.Tensor):
                         val_np = val.numpy()
                         frame_dict[key] = val_np.reshape(features[key]["shape"])
