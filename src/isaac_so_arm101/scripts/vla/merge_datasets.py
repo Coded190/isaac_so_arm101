@@ -1,4 +1,7 @@
 import os
+# Force the video backend to pyav BEFORE importing lerobot
+os.environ["LEROBOT_VIDEO_BACKEND"] = "pyav"
+
 import argparse
 import numpy as np
 import torch
@@ -27,6 +30,7 @@ def merge_datasets(input_root, output_root, repo_id):
         env_path = os.path.join(input_root, env_name)
         
         try:
+            # Explicitly request pyav backend for the source dataset
             ds = LeRobotDataset(repo_id=f"local/{env_name}", root=env_path, video_backend="pyav")
         except Exception as e:
             print(f"[WARN] Skipping {env_name}, could not load: {e}")
@@ -43,65 +47,52 @@ def merge_datasets(input_root, output_root, repo_id):
                 repo_id=repo_id,
                 root=output_root,
                 fps=ds.fps,
-                features=features
+                features=features,
+                video_backend="pyav"  # Ensure merged dataset also uses pyav
             )
-            print(f"[INFO] Created merged dataset at {output_root}")
 
-        print(f"[INFO] Processing {env_name} ({ds.num_episodes} episodes)...")
+        print(f"Processing {env_name}...")
 
-        # 4. Extract episode boundaries using the underlying HF dataset
-        ep_indices = ds.hf_dataset["episode_index"]
-        unique_eps = []
-        for ep in ep_indices:
-            if not unique_eps or unique_eps[-1] != ep:
-                unique_eps.append(ep)
-
-        # 5. Extract and add frames episode by episode
-        for ep_idx in unique_eps:
-            # Find all global frame indices for this episode
-            frame_idxs = [i for i, x in enumerate(ep_indices) if x == ep_idx]
+        # 4. Iterate through episodes in the source dataset
+        for ep_idx in range(ds.num_episodes):
+            frame_idxs = ds.episode_data_index["from"][ep_idx] : ds.episode_data_index["to"][ep_idx]
             
-            for i in frame_idxs:
+            print(f"Processing {env_name} episode {ep_idx}...")
+
+            # 5. Add all frames to the merged dataset
+            for i in frame_idxs.tolist():
+                # This call triggers video decoding but may skip string features like 'task'
                 frame = ds[i]
+                
+                # Prepare a frame dictionary for add_frame
                 frame_dict = {}
-                
-                # Reconstruct the dict needed for add_frame
-                for key in features.keys():
-                    if key not in frame:
-                        continue
-                        
-                    val = frame[key]
-                    
-                    # Handle Video/Image Features
-                    if features[key]["dtype"] == "video":
-                        if isinstance(val, torch.Tensor):
-                            if val.is_floating_point():
-                                # LeRobot tensors are usually [C, H, W] in [0.0, 1.0]
-                                img_numpy = (val.numpy() * 255.0).clip(0, 255).astype(np.uint8)
-                            else:
-                                img_numpy = val.numpy().astype(np.uint8)
-                            
-                            # Convert [C, H, W] to [H, W, C] for PIL
-                            img_numpy = np.transpose(img_numpy, (1, 2, 0))
-                            frame_dict[key] = Image.fromarray(img_numpy)
-                        else:
-                            frame_dict[key] = Image.fromarray(val)
-                            
-                    # Handle Arrays and Tensors (e.g., action, observation.state)
+                for key in features:
+                    # 1. Try to get the value from the 'frame' dictionary (tensors/images)
+                    if key in frame:
+                        val = frame[key]
+                    # 2. Fallback: Get it from the raw underlying Hugging Face dataset (strings/metadata)
+                    elif key in ds.hf_dataset.column_names:
+                        val = ds.hf_dataset[i][key]
                     else:
-                        if isinstance(val, torch.Tensor):
-                            # Squeeze scalars to prevent shape mismatch in LeRobot
-                            val_np = val.numpy()
-                            if val_np.ndim > 0 and val_np.shape[0] == 1 and features[key]["shape"] == (1,):
-                                frame_dict[key] = val_np
-                            else:
-                                frame_dict[key] = val_np.reshape(features[key]["shape"])
+                        print(f"[WARN] Feature '{key}' not found in frame {i} of {env_name}")
+                        continue
+                    
+                    # Convert tensors to numpy as expected by add_frame
+                    if isinstance(val, torch.Tensor):
+                        val_np = val.numpy()
+                        # Ensure we match the shape defined in features
+                        if val_np.ndim > 0 and val_np.shape[0] == 1 and features[key]["shape"] == (1,):
+                            frame_dict[key] = val_np
                         else:
-                            frame_dict[key] = val
+                            frame_dict[key] = val_np.reshape(features[key]["shape"])
+                    else:
+                        # This handles the 'task' string and other non-tensor types
+                        frame_dict[key] = val
                 
+                # This will now pass validation because 'task' is included in frame_dict
                 merged_dataset.add_frame(frame_dict)
             
-            # Save the episode chunk to lock it in
+            # Save the episode chunk to disk
             merged_dataset.save_episode()
             print(f"  -> Added episode {ep_idx} ({len(frame_idxs)} frames)")
 
@@ -118,6 +109,6 @@ if __name__ == "__main__":
     parser.add_argument("--input_dir", type=str, default="outputs/vla_palm_dataset", help="Path containing env_0000, env_0001, etc.")
     parser.add_argument("--output_dir", type=str, default="outputs/vla_palm_dataset_merged", help="Path to save the final merged dataset")
     parser.add_argument("--repo_id", type=str, default="local/merged_vla_dataset", help="Temporary local repo ID")
-    args = parser.parse_args()
     
+    args = parser.parse_args()
     merge_datasets(args.input_dir, args.output_dir, args.repo_id)
