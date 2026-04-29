@@ -63,31 +63,23 @@ def merge_datasets(input_root, output_root, repo_id):
             print(f"Processing {env_name} episode {ep_idx} (indices {start_idx} to {end_idx})...")
 
             # 5. Add all frames to the merged dataset
-            # Note: range(start, end) is exclusive of 'end'. 
-            # In LeRobot, dataset_to_index is the exclusive upper bound (total frames).
             for i in range(start_idx, end_idx):
-                # This call triggers video decoding
                 frame = ds[i]
                 
-                # Prepare a frame dictionary for add_frame
                 frame_dict = {}
                 for key in features:
-                    # 1. Try to get value from 'frame' (decoded tensors/images)
                     if key in frame:
+                        # Tensors/Images come from 'frame'
                         val = frame[key]
-                    # 2. Fallback to raw dataset for strings like 'task'
-                    elif key in ds.hf_dataset.column_names:
-                        val = ds.hf_dataset[i][key]
+                        val_np = val.numpy() if isinstance(val, torch.Tensor) else val
+                        frame_dict[key] = val_np.reshape(features[key]["shape"])
+                    elif key == "task":
+                        # Strings like 'task' MUST be fetched from the raw hf_dataset
+                        frame_dict[key] = ds.hf_dataset[i]["task"]
                     else:
+                        # Skip if feature is not found
                         continue
                     
-                    # Ensure tensors are converted to numpy with correct shape
-                    if isinstance(val, torch.Tensor):
-                        val_np = val.numpy()
-                        frame_dict[key] = val_np.reshape(features[key]["shape"])
-                    else:
-                        frame_dict[key] = val
-                
                 merged_dataset.add_frame(frame_dict)
             
             # Save the episode chunk to disk
