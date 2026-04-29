@@ -454,11 +454,6 @@ def main():
                 "shape": (1,),
                 "names": None,
             },
-            "task": {
-                "dtype": "string",
-                "shape": (1,),
-                "names": None,
-            }, 
             "observation.state": { 
                 "dtype": "float32", 
                 "shape": (num_dof,), 
