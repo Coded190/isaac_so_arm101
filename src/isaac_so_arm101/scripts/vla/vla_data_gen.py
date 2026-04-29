@@ -555,7 +555,7 @@ def main():
             if args_cli.save_data and datasets is not None:
                 for env_id in range(num_envs):
                     # Keep quality high: drop in-progress partial episodes at shutdown.
-                    if datasets[env_id].has_pending_frames():
+                    if episode_frame_count[env_id] > 0:
                         datasets[env_id].clear_episode_buffer()
                     datasets[env_id].finalize()
                 abs_save_path = os.path.abspath(args_cli.dataset_root)
@@ -613,11 +613,11 @@ def main():
             if args_cli.save_data and datasets is not None:
                 for env_id in done_env_ids:
                     if oracles[env_id].completed and not oracles[env_id].timed_out:
-                        if datasets[env_id].has_pending_frames():
+                        if episode_frame_count[env_id] > 0:
                             datasets[env_id].save_episode()
                             saved_frame_count[env_id] += episode_frame_count[env_id]
                     else:
-                        if datasets[env_id].has_pending_frames():
+                        if episode_frame_count[env_id] > 0:
                             datasets[env_id].clear_episode_buffer()
             print(
                 f"[INFO]: Resetting {len(done_env_ids)} env(s) on termination/truncation. "
