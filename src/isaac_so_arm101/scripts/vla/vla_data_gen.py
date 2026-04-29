@@ -454,7 +454,7 @@ def main():
                 "shape": (1,),
                 "names": None,
             },
-            "language_instruction": {
+            "task": {
                 "dtype": "string",
                 "shape": (1,),
                 "names": None,
@@ -546,10 +546,10 @@ def main():
                     ee_pose_env = np.concatenate([ee_pos_all[env_id], ee_quat_all[env_id]])
                     frame_dict = {
                         "env_id": np.array([env_id], dtype=np.int64),
+                        "task": TASK_DESCRIPTION,
                         "observation.state": joint_positions_all[env_id].astype(np.float32),
                         "observation.state.ee_pose": ee_pose_env.astype(np.float32),
                         "observation.images.wrist_camera": Image.fromarray(img_rgb),
-                        "language_instruction": TASK_DESCRIPTION,
                         "action": action_batch[env_id].astype(np.float32),
                     }
                     datasets[env_id].add_frame(frame_dict)
