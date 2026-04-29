@@ -27,7 +27,7 @@ def merge_datasets(input_root, output_root, repo_id):
         env_path = os.path.join(input_root, env_name)
         
         try:
-            ds = LeRobotDataset(env_path)
+            ds = LeRobotDataset(repo_id=f"local/{env_name}", root=env_path)
         except Exception as e:
             print(f"[WARN] Skipping {env_name}, could not load: {e}")
             continue

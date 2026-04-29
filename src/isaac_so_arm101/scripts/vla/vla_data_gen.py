@@ -646,9 +646,8 @@ def main():
             # Refresh Blue Hover Targets
             spawn_target_markers(stage, current_hover_targets, env_ids=done_env_ids, marker_type="hover", color=(0.0, 0.0, 1.0))
 
-    if args_cli.save_data and datasets is not None:
-        for env_id in range(num_envs):
-            datasets[env_id].finalize()
+    import sys
+    sys.exit(0)
 
 if __name__ == "__main__": 
     main()
