@@ -1,6 +1,6 @@
 import os
-# Force the video backend to pyav BEFORE importing lerobot
-os.environ["LEROBOT_VIDEO_BACKEND"] = "pyav"
+# # Force the video backend to pyav BEFORE importing lerobot
+# os.environ["LEROBOT_VIDEO_BACKEND"] = "pyav"
 import json
 import numpy as np
 import torch
@@ -27,7 +27,8 @@ def prepare_data():
     print("(This will automatically handle decoding the .mp4 video chunks)")
     
 # Instantiate the LeRobot dataset using pyav to avoid CUDA/torchcodec errors
-    ds = LeRobotDataset(hf_repo_id, video_backend="pyav")
+    ds = LeRobotDataset(hf_repo_id)
+    # ds = LeRobotDataset(hf_repo_id, video_backend="pyav")
     
     # --- STEP 1: Compute Global Normalization Statistics ---
     print("Analyzing action values for normalization...")
