@@ -104,6 +104,17 @@ uv run vla_lora_finetune \
    --batch_size 1 \
    --grad_accum_steps 16 \
    --use_4bit
+
+uv run vla_lora_finetune.py \
+    --vla_path "openvla/openvla-7b" \
+    --data_jsonl "vla_finetune_data/dataset.jsonl" \
+    --image_root "vla_finetune_data/images" \
+    --output_dir "outputs/openvla_lora_weights" \
+    --batch_size 4 \
+    --grad_accum_steps 4 \
+    --learning_rate 5e-4 \
+    --use_4bit \
+    --max_steps 5000
 ```
 
 Run inference with the fine-tuned adapter.
