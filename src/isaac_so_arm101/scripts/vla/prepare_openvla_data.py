@@ -82,14 +82,26 @@ def prepare_data():
             img.save(img_path)
 
             # 3. Get Instruction Task
-            # As we discovered in the merge script, 'task' strings are kept in the raw dataset
+            # Check if it's in the raw dataset first
             if "task" in ds.hf_dataset.column_names:
                 instruction = ds.hf_dataset[i]["task"]
+            elif "instruction" in ds.hf_dataset.column_names:
+                instruction = ds.hf_dataset[i]["instruction"]
             else:
-                # Fallback if LeRobot stored it in the tasks dictionary instead
+                # Fallback: Check the meta tasks dictionary
                 task_idx = frame["task_index"].item()
-                instruction = ds.meta.tasks["task"][task_idx]
-
+                
+                # LeRobot usually stores the text under the plural 'tasks' key
+                if "tasks" in ds.meta.tasks:
+                    instruction = ds.meta.tasks["tasks"][task_idx]
+                elif "task" in ds.meta.tasks:
+                    instruction = ds.meta.tasks["task"][task_idx]
+                elif "instruction" in ds.meta.tasks:
+                    instruction = ds.meta.tasks["instruction"][task_idx]
+                else:
+                    # Crash gracefully and show what keys actually exist
+                    available_keys = list(ds.meta.tasks.keys())
+                    raise KeyError(f"Could not find task text. Available keys in meta.tasks: {available_keys}")
             # 4. Normalize Action
             raw_action = frame["action"].numpy()
             denominator = action_max - action_min
