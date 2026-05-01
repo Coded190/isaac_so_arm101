@@ -479,7 +479,6 @@ def main() -> None:
         quantization_config=quant_config,
         low_cpu_mem_usage=True,
         trust_remote_code=True,
-        device_map={"": accelerator.local_process_index},
         # device_map={"": 0} if args.use_4bit else None,
     )
     # Hint transformers to use eager attention to avoid SDPA dispatch.
@@ -490,8 +489,8 @@ def main() -> None:
 
     if args.use_4bit:
         model = prepare_model_for_kbit_training(model)
-    # else:
-    #     model = model.to(device)
+    else:
+        model = model.to(device)
 
     model.config.use_cache = False
 
