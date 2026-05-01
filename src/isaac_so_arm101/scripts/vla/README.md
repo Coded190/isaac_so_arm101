@@ -95,6 +95,12 @@ Use `--append` to keep adding more samples to an existing `dataset.jsonl`.
 
 Fine-tune a LoRA adapter (PEFT) on a simple JSONL dataset.
 
+Use install LoRA training dependencies to avoid version conflicts: 
+
+```bash
+uv pip install "transformers==4.40.1" "peft==0.11.1" bitsandbytes accelerate
+```
+
 ```bash
 uv run vla_lora_finetune \
    --data_jsonl /path/to/dataset.jsonl \
