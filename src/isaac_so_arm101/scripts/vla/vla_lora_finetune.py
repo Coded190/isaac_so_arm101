@@ -40,6 +40,7 @@ from torch.optim import AdamW
 from torch.utils.data import DataLoader, Dataset
 from transformers import AutoModelForVision2Seq, AutoProcessor, BitsAndBytesConfig
 import wandb
+from accelerate import Accelerator
 
 IGNORE_INDEX = -100
 
@@ -448,7 +449,9 @@ def main() -> None:
     )
     (output_dir / "train_config.json").write_text(json.dumps(asdict(train_cfg), indent=2), encoding="utf-8")
 
-    device = torch.device("cuda:0")
+    accelerator = Accelerator()
+    device = accelerator.device
+    # device = torch.device("cuda:0")
 
     # Compatibility patch for some container transformer builds
     _patch_transformers_attention_dispatch()
@@ -476,7 +479,8 @@ def main() -> None:
         quantization_config=quant_config,
         low_cpu_mem_usage=True,
         trust_remote_code=True,
-        device_map={"": 0} if args.use_4bit else None,
+        device_map={"": accelerator.local_process_index} if accelerator.is_initialized() else None,
+        # device_map={"": 0} if args.use_4bit else None,
     )
     # Hint transformers to use eager attention to avoid SDPA dispatch.
     try:
@@ -486,8 +490,8 @@ def main() -> None:
 
     if args.use_4bit:
         model = prepare_model_for_kbit_training(model)
-    else:
-        model = model.to(device)
+    # else:
+    #     model = model.to(device)
 
     model.config.use_cache = False
 
@@ -539,6 +543,7 @@ def main() -> None:
     # Optimizer
     trainable_params = [p for p in model.parameters() if p.requires_grad]
     optimizer = AdamW(trainable_params, lr=args.learning_rate)
+    model, optimizer, dataloader = accelerator.prepare(model, optimizer, dataloader)
 
     # Training loop
     amp_dtype: Optional[torch.dtype]
@@ -550,15 +555,13 @@ def main() -> None:
         amp_dtype = None
     
     # Initialize Weights & Biases logging
-    wandb.init(
-        project="openvla-isaac-arm101", # The name of the project in your dashboard
-        name="196GB-lora-run",          # The name of this specific training run
-        config={
-            "batch_size": 16,
-            "learning_rate": 5e-4,
-            "max_steps": 5000
-        }
-    )
+    
+    if accelerator.is_main_process:
+        wandb.init(
+            project="openvla-isaac-arm101",
+            name="196GB-lora-run",          
+            config=asdict(train_cfg) # <--- This automatically tracks your exact CLI flags!
+        )
 
     print(
         "[INFO] Starting fine-tuning: "
@@ -614,26 +617,30 @@ def main() -> None:
             )
             loss = outputs.loss
             
-        wandb.log({"train/loss": loss.item(), "step": global_step})
-
-        (loss / args.grad_accum_steps).backward()
+        # (loss / args.grad_accum_steps).backward()
+        accelerator.backward(loss / args.grad_accum_steps)
 
         if micro_step % args.grad_accum_steps == 0:
             optimizer.step()
             optimizer.zero_grad(set_to_none=True)
             global_step += 1
 
-            if global_step % 10 == 0:
-                print(f"[TRAIN] step={global_step} loss={loss.item():.4f}")
+            # Only print, log, and save on the main GPU!
+            if accelerator.is_main_process:
+                wandb.log({"train/loss": loss.item(), "step": global_step})
+                
+                if global_step % 10 == 0:
+                    print(f"[TRAIN] step={global_step} loss={loss.item():.4f}")
 
-            if args.save_steps > 0 and global_step % args.save_steps == 0:
-                print(f"[INFO] Saving adapter checkpoint at step={global_step} -> {output_dir}")
-                processor.save_pretrained(output_dir)
-                model.save_pretrained(output_dir)
+                if args.save_steps > 0 and global_step % args.save_steps == 0:
+                    print(f"[INFO] Saving adapter checkpoint at step={global_step} -> {output_dir}")
+                    processor.save_pretrained(output_dir)
+                    accelerator.unwrap_model(model).save_pretrained(output_dir)
 
-    print(f"[INFO] Training complete. Saving final adapter -> {output_dir}")
-    processor.save_pretrained(output_dir)
-    model.save_pretrained(output_dir)
+    if accelerator.is_main_process:
+        print(f"[INFO] Training complete. Saving final adapter -> {output_dir}")
+        processor.save_pretrained(output_dir)
+        accelerator.unwrap_model(model).save_pretrained(output_dir)
 
 
 if __name__ == "__main__":
