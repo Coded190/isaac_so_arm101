@@ -39,6 +39,7 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.optim import AdamW
 from torch.utils.data import DataLoader, Dataset
 from transformers import AutoModelForVision2Seq, AutoProcessor, BitsAndBytesConfig
+import wandb
 
 IGNORE_INDEX = -100
 
@@ -547,6 +548,17 @@ def main() -> None:
         amp_dtype = torch.float16
     else:
         amp_dtype = None
+    
+    # Initialize Weights & Biases logging
+    wandb.init(
+        project="openvla-isaac-arm101", # The name of the project in your dashboard
+        name="196GB-lora-run",          # The name of this specific training run
+        config={
+            "batch_size": 16,
+            "learning_rate": 5e-4,
+            "max_steps": 5000
+        }
+    )
 
     print(
         "[INFO] Starting fine-tuning: "
@@ -601,6 +613,8 @@ def main() -> None:
                 labels=labels,
             )
             loss = outputs.loss
+            
+        wandb.log({"train/loss": loss.item(), "step": global_step})
 
         (loss / args.grad_accum_steps).backward()
 

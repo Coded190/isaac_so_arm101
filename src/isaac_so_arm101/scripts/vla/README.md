@@ -98,7 +98,7 @@ Fine-tune a LoRA adapter (PEFT) on a simple JSONL dataset.
 Use install LoRA training dependencies to avoid version conflicts: 
 
 ```bash
-uv pip install "transformers==4.40.1" "peft==0.11.1" bitsandbytes accelerate
+uv pip install -p /path/to/directory/isaac_so_arm101/.venv "transformers==4.40.1" "peft==0.11.1" bitsandbytes accelerate
 ```
 
 ```bash
