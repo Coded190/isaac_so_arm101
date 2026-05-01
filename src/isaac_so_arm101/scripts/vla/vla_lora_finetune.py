@@ -40,7 +40,7 @@ from torch.optim import AdamW
 from torch.utils.data import DataLoader, Dataset
 from transformers import AutoModelForVision2Seq, AutoProcessor, BitsAndBytesConfig
 import wandb
-from accelerate import Accelerator
+from accelerate import Accelerator, DistributedDataParallelKwargs
 
 IGNORE_INDEX = -100
 
@@ -449,7 +449,8 @@ def main() -> None:
     )
     (output_dir / "train_config.json").write_text(json.dumps(asdict(train_cfg), indent=2), encoding="utf-8")
 
-    accelerator = Accelerator()
+    ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
+    accelerator = Accelerator(kwargs_handlers=[ddp_kwargs])
     device = accelerator.device
     # device = torch.device("cuda:0")
 
