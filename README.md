@@ -1,113 +1,82 @@
-# Reinforcement Learning with the SO-ARM100 / SO-ARM101 in Isaac Lab
+# LeIsaac 🚀
 
-[![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
-[![Isaac Sim](https://img.shields.io/badge/IsaacSim-5.1.0-76B900.svg)](https://docs.isaacsim.omniverse.nvidia.com/latest/index.html)
-[![Isaac Lab](https://img.shields.io/badge/IsaacLab-2.3.0-8A2BE2.svg)](https://isaac-sim.github.io/IsaacLab/main/index.html)
-[![Python](https://img.shields.io/badge/python-3.11-3776AB.svg)](https://docsthon.org/3/whatsnew/3.11.html)
+https://github.com/user-attachments/assets/763acf27-d9a9-4163-8651-3ba0a6a185d7
 
-This repository implements tasks for the SO‑ARM100 and SO‑ARM101 robots using Isaac Lab. It serves as the foundation for several tutorials in the LycheeAI Hub series [Project: SO‑ARM101 × Isaac Sim × Isaac Lab](https://lycheeai-hub.com/project-so-arm101-x-isaac-sim-x-isaac-lab-tutorial-series).
+This repository provides teleoperation functionality in [IsaacLab](https://isaac-sim.github.io/IsaacLab/main/index.html) using the SO101Leader ([LeRobot](https://github.com/huggingface/lerobot)), including data collection, data conversion, and subsequent policy training.
 
-### 📰 News featuring this repository:
+- 🤖 We use SO101Follower as the robot (and other related robot) in IsaacLab and provide relevant teleoperation method.
+- 🔄 We offer scripts to convert data from HDF5 format to the LeRobot Dataset.
+- 🧠 We utilize simulation-collected data to fine-tune [GR00T N1.5](https://github.com/NVIDIA/Isaac-GR00T) and deploy it on real hardware. And more policies will be supported.
 
-- **Nov. 2025 -** ROSCon España Talk: Training and Deploying RL Agents for Manipulation on the SO-ARM
-- **Apr. 2025 -** NVIDIA Omniverse Livestream: Training a Robot from Scratch in Simulation (URDF → OpenUSD). [Watch on YouTube](https://www.youtube.com/watch?v=_HMk7I-vSBQ)
-- **Apr. 2025 -** LycheeAI Tutorial: How to Create External Projects in Isaac Lab. [Watch on YouTube](https://www.youtube.com/watch?v=i51krqsk8ps)
+> [!TIP]
+> ***Welcome to the Lightwheel open-source community!***
+>
+> Join us, contribute, and help shape the future of AI and robotics. For questions or collaboration, contact [Zeyu](mailto:zeyu.hu@lightwheel.ai) or [Yinghao](mailto:yinghao.shuai@lightwheel.ai).
 
-## Installation
-
-Install uv.
-```bash
-curl -LsSf https://astral.sh/uv/install.sh \| sh
-```
-
-Clone the repository.
-
-```bash
-git clone https://github.com/MuammerBay/isaac_so_arm101.git
-cd isaac_so_arm101
-uv sync
-```
+## News 🗞️
+- [26/04/14] Remote teleoperation is now available in LeIsaac! Try it out [here](https://lightwheelai.github.io/leisaac/docs/getting_started/teleoperation#remote-teleoperation).
+- [26/03/10] With the new `datagen` module, LeIsaac can generate motion trajectories programmatically. See [State Machine Data Generation](https://lightwheelai.github.io/leisaac/docs/features/state_machine).
+- [26/01/16] Added inference support for GR00T N1.6; details are in [Available Policy Inference](https://lightwheelai.github.io/leisaac/resources/available_policy#finetuned-gr00t-n16).
+- [26/01/13] Try our tutorial [LeIsaac x Cosmos](https://lightwheelai.github.io/leisaac/docs/tutorials/cosmos_tutorial) to get a video2action data generation pipeline.
+- [26/01/12] Extra feature of [lerobot recorder integration](https://lightwheelai.github.io/leisaac/docs/features/lerobot_recorder) released! You can now record data directly in LeRobot Dataset format during teleoperation.
+- [25/12/19] Try our tutorial [LeIsaac x Marble](https://lightwheelai.github.io/leisaac/docs/tutorials/marble_tutorial) to build and evaluate diverse embodied tasks across large-scale generalized environments.
+- [25/12/19] We now support lekiwi-based teleoperation and provide a Loft scene for the community. See the example task [here](https://lightwheelai.github.io/leisaac/resources/available_env).
+- [25/11/27] We now support more teleoperation devices, including the enhanced keyboard and gamepad. Refer to [the device guide](https://lightwheelai.github.io/leisaac/resources/available_devices) for usage details.
+- [25/11/26] LeIsaac is now the official imitation-learning (IL) simulation playground integrated into LeRobot’s EnvHub. It provides fast, scalable Isaac-based environments designed for imitation learning, control, and policy evaluation. It is featured in LeRobot: [LeIsaac × LeRobot EnvHub](https://huggingface.co/docs/lerobot/en/envhub_leisaac)
 
 
-## Quickstart
+## Getting Started 📚
 
-List available environments.
+Please refer to our [documentation](https://lightwheelai.github.io/leisaac/) to learn how to use this repository. Follow these links to learn more about:
 
-```bash
-uv run list_envs
-```
+- [Installation and Setup](https://lightwheelai.github.io/leisaac/docs/getting_started/installation)
+- [Extra Features](https://lightwheelai.github.io/leisaac/docs/features)
+- [Policy Inference](https://lightwheelai.github.io/leisaac/docs/getting_started/policy_support)
+- [Available Robots](https://lightwheelai.github.io/leisaac/resources/available_robots), [Environments](https://lightwheelai.github.io/leisaac/resources/available_env) and [Policy](https://lightwheelai.github.io/leisaac/resources/available_policy)
 
-Test with dummy agents.
+## Contributing 🤝
 
-```bash
-uv run zero_agent --task SO-ARM100-Reach-Play-v0    # send zero actions
-uv run random_agent --task SO-ARM100-Reach-Play-v0  # send random actions
-```
+Please see [CONTRIBUTING.md](CONTRIBUTING.md) for how to report issues and submit pull requests.
 
-## Reaching
+## Citation 📝
 
-Code for PingTi arm and RL PPO Algorithm.
+If you use leisaac, please cite it as follows.
 
-```bash
-uv run train --task Isaac-PING-TI-Reach-v0 --headless
-uv run play --task Isaac-PING-TI-Reach-Play-v0
-```
-
-Test with VLA model.
-
-```bash
-uv run vla_inference --task Isaac-PING-TI-VLA-v0 --num_envs 1 --enable_cameras
-```
-
-Train a RL-based IK policy.
-
-```bash
-uv run train --task SO-ARM100-Reach-v0 --headless
-```
-
-Evaluate a trained policy.
-
-```bash
-uv run play --task SO-ARM100-Reach-Play-v0
-```
-
-## Sim2Real Transfer
-
-_Work in progress._
-
-## Results
-
-![rl-video-step-0](https://github.com/user-attachments/assets/890e3a9d-5cbd-46a5-9317-37d0f2511684)
-
-## Acknowledgements
-
-This project builds upon the excellent work of several open-source projects and communities:
-
-- **[Isaac Lab](https://isaac-sim.github.io/IsaacLab/)** — The foundational robotics simulation framework that powers this project
-- **[NVIDIA Isaac Sim](https://developer.nvidia.com/isaac-sim)** — The underlying physics simulation platform
-- **[RSL-RL](https://github.com/leggedrobotics/rsl_rl)** — Reinforcement learning library used for training policies
-- **[SO-ARM100/SO-ARM101 Robot](https://github.com/TheRobotStudio/SO-ARM100)** — The hardware platform that inspired this simulation environment
-- **[WowRobo](https://shop.wowrobo.com/?sca_ref=8879221)** — Project sponsor providing assembled SO-ARM kits and parts (use code `LYCHEEAI5` for 5% off)
-
-Special thanks to the Isaac Lab development team at NVIDIA, Hugging Face and The Robot Studio for the SO‑ARM robot series, and the LycheeAI Hub community for tutorials and support.
-
-## Citation
-
-If you use this work, please cite it as:
-
-```bibtex
-@software{Louis_Isaac_Lab_2025,
-   author = {Louis, Le Lay and Muammer, Bay},
-   doi = {https://doi.org/10.5281/zenodo.16794229},
-   license = {BSD-3-Clause},
-   month = apr,
-   title = {Isaac Lab – SO‑ARM100 / SO‑ARM101 Project},
-   url = {https://github.com/MuammerBay/isaac_so_arm101},
-   version = {1.1.0},
-   year = {2025}
+```txt
+@software{Lightwheel_and_LeIsaac_Project_Developers_LeIsaac_2025,
+author = {{Lightwheel} and {LeIsaac Project Developers}},
+license = {Apache-2.0},
+month = dec,
+title = {{LeIsaac}},
+url = {https://github.com/LightwheelAI/leisaac},
+version = {0.4.0},
+year = {2026}
 }
 ```
 
-## License
+## Acknowledgements 🙏
 
-See [LICENSE](LICENSE) for details.
+We gratefully acknowledge [IsaacLab](https://github.com/isaac-sim/IsaacLab) and [LeRobot](https://github.com/huggingface/lerobot) for their excellent work, from which we have borrowed some code.
+
+## Join Our Team! 💼
+
+We're always looking for talented individuals passionate about AI and robotics! If you're interested in:
+
+- 🤖 **Robotics Engineering**: Working with cutting-edge robotic systems and teleoperation
+- 🧠 **AI/ML Research**: Developing next-generation AI models for robotics
+- 💻 **Software Engineering**: Building robust, scalable robotics software
+- 🔬 **Research & Development**: Pushing the boundaries of what's possible in robotics
+
+**Join us at Lightwheel AI!** We offer:
+- Competitive compensation and benefits
+- Work with state-of-the-art robotics technology
+- Collaborative, innovative environment
+- Opportunity to shape the future of AI-powered robotics
+
+**[Apply Now →](https://lightwheel.ai/career)** | **[Contact Now →](mailto:zeyu.hu@lightwheel.ai)** | **[Learn More About Us →](https://lightwheel.ai)**
+
+---
+
+**Let's build the future of robotics together! 🤝**
+
+---
