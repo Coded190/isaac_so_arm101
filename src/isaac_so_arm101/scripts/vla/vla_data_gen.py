@@ -495,8 +495,8 @@ def main():
 
     oracles = [SprayOracle() for _ in range(num_envs)]
     
-    # Spawn Blue Hover Targets
-    spawn_target_markers(stage, current_hover_targets, marker_type="hover", color=(0.0, 0.0, 1.0))  
+    # # Spawn Blue Hover Targets
+    # spawn_target_markers(stage, current_hover_targets, marker_type="hover", color=(0.0, 0.0, 1.0))  
     
     # Resolve the gripper body index once to avoid repeated name lookups in the hot loop. 
     moving_gripper_indices, _ = env.unwrapped.scene["robot"].find_bodies("moving_gripper") 
@@ -643,8 +643,8 @@ def main():
                 oracles[env_id] = SprayOracle()
                 episode_frame_count[env_id] = 0
             
-            # Refresh Blue Hover Targets
-            spawn_target_markers(stage, current_hover_targets, env_ids=done_env_ids, marker_type="hover", color=(0.0, 0.0, 1.0))
+            # # Refresh Blue Hover Targets
+            # spawn_target_markers(stage, current_hover_targets, env_ids=done_env_ids, marker_type="hover", color=(0.0, 0.0, 1.0))
 
     import sys
     sys.exit(0)
