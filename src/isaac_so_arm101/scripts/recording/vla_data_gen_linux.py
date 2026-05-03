@@ -2,7 +2,7 @@
 # All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""OBS recording variant of scripts/vla/vla_data_gen.py.
+"""OBS recording variant of scripts/vla/vla_data_gen.py (Linux).
 
 Runs the same SprayOracle FSM and palm-spray simulation so OBS can capture the
 Isaac Sim viewport. All progress prints, telemetry heartbeats, and LeRobot
@@ -10,9 +10,9 @@ dataset writing are removed — the loop only drives the simulation. Visual
 markers (blue hover sphere) and the brief rest-pose hold are kept so the
 recorded footage matches what the data-gen run looks like.
 
-Windows launch:
-    .\\python.bat kantas\\isaac_so_arm101\\src\\isaac_so_arm101\\scripts\\recording\\vla_data_gen.py ^
-        --task Isaac-PING-TI-VLA-v0 --num_envs 1 --enable_cameras 2>$null
+Linux launch (from /home/cirplab/kantas/isaac_so_arm101):
+    .venv/bin/python src/isaac_so_arm101/scripts/recording/vla_data_gen_linux.py \\
+        --task Isaac-PING-TI-VLA-v0 --num_envs 1 --enable_cameras 2>/dev/null
 """
 
 import argparse
@@ -87,7 +87,7 @@ import carb
 # Just the global level. Per-channel hammering was triggering
 # "getStringRawInternal: item ... is not a string" errors and timing
 # out the viewport. Console noise is filtered by the Python stderr
-# wrapper at the top of this file plus 2>$null in the launch command.
+# wrapper at the top of this file plus 2>/dev/null in the launch command.
 carb.settings.get_settings().set_string("/log/level", "error")
 simulation_app = app_launcher.app
 

@@ -111,5 +111,5 @@ PING_TI_CFG = ArticulationCfg(
             damping=20.0,
         ),
     },
-    soft_joint_pos_limit_factor=0.9,
+    soft_joint_pos_limit_factor=1.0,
 )
