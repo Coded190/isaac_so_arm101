@@ -265,6 +265,7 @@ def spawn_target_marker(stage, position_world, marker_path, radius=0.04, color=(
                                          float(position_world[1]),
                                          float(position_world[2])))
     sphere.GetDisplayColorAttr().Set([Gf.Vec3f(*color)])
+    UsdGeom.Imageable(sphere).MakeInvisible()
 
 
 def spawn_target_markers(stage, target_positions, env_ids=None, marker_type="spray", color=(1.0, 0.0, 0.0)):
