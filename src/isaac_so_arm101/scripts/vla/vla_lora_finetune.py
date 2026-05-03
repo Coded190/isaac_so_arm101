@@ -1,24 +1,27 @@
-"""LoRA fine-tuning for OpenVLA on a simple JSONL dataset.
+"""Full fine-tuning for OpenVLA on JSONL or LeRobot datasets.
 
 This script is intentionally *minimal* and does not require RLDS/TFDS.
-It fine-tunes OpenVLA via PEFT/LoRA and saves an adapter directory that can be
-loaded by `vla_inference.py` using `--lora_path`.
+It fine-tunes all OpenVLA parameters in bf16 (no LoRA, no quantization)
+and saves the full model weights to --output_dir.
 
-Dataset format (JSONL): one JSON object per line, with keys:
-  - "image": path to an RGB image (relative to --image_root or absolute)
-  - "instruction": natural-language instruction string
-  - "action": list[float] of length --action_dim (default: 7)
+Dataset options (mutually exclusive):
+  --data_jsonl   : JSONL file, one JSON object per line with keys:
+                     "image", "instruction", "action" (normalized to [-1, 1])
+  --lerobot_repo_ids : comma-separated HuggingFace LeRobot repo IDs
+                     (e.g. coded190/pingti_palm_tree,coded190/isaac_so_arm101_vla)
+                     Actions are auto-normalized to [-1, 1] from dataset stats.
 
-Action values are expected to already be normalized to [-1, 1] for each
-dimension. This matches OpenVLA's default ActionTokenizer binning.
-
-Example line:
-  {"image": "frame_000123.png", "instruction": "reach the red block", "action": [0.1, 0.0, -0.2, 0.0, 0.0, 0.1, 1.0]}
+Example command:
+  NCCL_SHM_DISABLE=1 NCCL_P2P_DISABLE=1 NCCL_SOCKET_IFNAME=eno1 \\
+  uv run accelerate launch --num_processes 2 vla_lora_finetune.py \\
+      --vla_path openvla/openvla-7b \\
+      --lerobot_repo_ids coded190/pingti_palm_tree,coded190/isaac_so_arm101_vla \\
+      --output_dir outputs/openvla_fullft \\
+      --batch_size 16 --learning_rate 5e-4 --max_steps 2500
 
 Notes:
   - OpenVLA is loaded with `trust_remote_code=True`.
   - By default, we append exactly one EOS token so the model learns to stop.
-
 """
 
 from __future__ import annotations
@@ -34,11 +37,10 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 import numpy as np
 import torch
 from PIL import Image
-from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from torch.nn.utils.rnn import pad_sequence
 from torch.optim import AdamW
 from torch.utils.data import DataLoader, Dataset
-from transformers import AutoModelForVision2Seq, AutoProcessor, BitsAndBytesConfig
+from transformers import AutoModelForVision2Seq, AutoProcessor
 import wandb
 from accelerate import Accelerator, DistributedDataParallelKwargs
 
@@ -278,6 +280,132 @@ class JsonlVlaDataset(Dataset):
         }
 
 
+class LeRobotVlaDataset(Dataset):
+    """Loads one or more LeRobot v3 datasets and presents them as a combined VLA training set.
+
+    Actions are normalized per-channel to [-1, 1] using the global min/max across all
+    provided datasets. Norm stats are exposed via `get_norm_stats()` for saving.
+    """
+
+    def __init__(
+        self,
+        *,
+        repo_ids: List[str],
+        tokenizer,
+        image_transform,
+        vla_path: Union[str, Path],
+        action_tokenizer: "DiscreteActionTokenizer",
+        action_dim: int = 7,
+        predict_stop_token: bool = True,
+    ) -> None:
+        try:
+            from lerobot.datasets.lerobot_dataset import LeRobotDataset as _LeRobotDataset
+            import pandas as pd
+        except ImportError as exc:
+            raise ImportError(
+                "lerobot and pandas are required for --lerobot_repo_ids. "
+                "Install with: pip install lerobot pandas"
+            ) from exc
+
+        self._tokenizer = tokenizer
+        self._image_transform = image_transform
+        self._vla_path = str(vla_path)
+        self._action_tokenizer = action_tokenizer
+        self._action_dim = int(action_dim)
+        self._predict_stop_token = bool(predict_stop_token)
+
+        if self._tokenizer.pad_token_id is None:
+            self._tokenizer.pad_token_id = self._tokenizer.eos_token_id
+
+        self._lerobot_datasets: List[Any] = []
+        self._index: List[Tuple[int, int]] = []  # (dataset_idx, frame_idx)
+        all_actions: List[np.ndarray] = []
+
+        for ds_idx, repo_id in enumerate(repo_ids):
+            print(f"[INFO] Loading LeRobot dataset: {repo_id}")
+            ds = _LeRobotDataset(repo_id)
+            self._lerobot_datasets.append(ds)
+
+            # Scan actions from Parquet (no video decoding needed for stats)
+            data_dir = Path(ds.root) / "data"
+            for pf in sorted(data_dir.glob("**/*.parquet")):
+                df = pd.read_parquet(pf, columns=["action"])
+                all_actions.extend(df["action"].tolist())
+
+            for i in range(len(ds)):
+                self._index.append((ds_idx, i))
+            print(f"  -> {len(ds)} frames")
+
+        if not self._index:
+            raise ValueError("No frames found in the provided LeRobot datasets.")
+
+        actions_arr = np.array(all_actions, dtype=np.float32)  # (N, action_dim)
+        self.action_norm_min: np.ndarray = actions_arr.min(axis=0)
+        self.action_norm_max: np.ndarray = actions_arr.max(axis=0)
+        print(f"[INFO] Action norm min: {self.action_norm_min.tolist()}")
+        print(f"[INFO] Action norm max: {self.action_norm_max.tolist()}")
+
+    def get_norm_stats(self) -> Dict[str, Any]:
+        return {
+            "action_norm_min": self.action_norm_min.tolist(),
+            "action_norm_max": self.action_norm_max.tolist(),
+        }
+
+    def _normalize_action(self, action: np.ndarray) -> np.ndarray:
+        rng = self.action_norm_max - self.action_norm_min
+        rng = np.where(rng < 1e-8, 1.0, rng)
+        return np.clip(2.0 * (action - self.action_norm_min) / rng - 1.0, -1.0, 1.0).astype(np.float32)
+
+    def __len__(self) -> int:
+        return len(self._index)
+
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        ds_idx, frame_idx = self._index[idx]
+        frame = self._lerobot_datasets[ds_idx][frame_idx]
+
+        # (C, H, W) uint8 tensor -> PIL RGB
+        img_t = frame["observation.images.wrist_camera"]
+        img_np = img_t.permute(1, 2, 0).numpy().astype(np.uint8)
+        image = Image.fromarray(img_np)
+
+        action = frame["action"].numpy().astype(np.float32)
+        action_norm = self._normalize_action(action)
+
+        if action_norm.shape != (self._action_dim,):
+            raise ValueError(
+                f"Expected action shape ({self._action_dim},) but got {action_norm.shape}"
+            )
+
+        instruction = str(frame["task"])
+
+        action_text = self._action_tokenizer(action_norm)
+        prompt = build_openvla_prompt(instruction, vla_path=self._vla_path)
+        base_text = f"{prompt}{action_text}"
+        tokenized = self._tokenizer(base_text, add_special_tokens=True, return_attention_mask=False)
+        input_ids: List[int] = list(tokenized["input_ids"])
+
+        if input_ids[-1] != self._tokenizer.eos_token_id:
+            input_ids.append(self._tokenizer.eos_token_id)
+
+        labels = list(input_ids)
+        keep = self._action_dim + 1
+        if len(labels) < keep:
+            raise ValueError("Tokenization produced a sequence shorter than expected.")
+        for i in range(len(labels) - keep):
+            labels[i] = IGNORE_INDEX
+
+        if not self._predict_stop_token:
+            labels[-1] = IGNORE_INDEX
+
+        pixel_values = self._image_transform(image)
+
+        return {
+            "input_ids": torch.tensor(input_ids, dtype=torch.long),
+            "labels": torch.tensor(labels, dtype=torch.long),
+            "pixel_values": pixel_values,
+        }
+
+
 class PaddedCollatorForActionPrediction:
     def __init__(
         self,
@@ -322,7 +450,8 @@ class PaddedCollatorForActionPrediction:
 @dataclass
 class TrainConfig:
     vla_path: str
-    data_jsonl: str
+    data_jsonl: Optional[str]
+    lerobot_repo_ids: Optional[List[str]]
     image_root: Optional[str]
     output_dir: str
     batch_size: int
@@ -330,9 +459,6 @@ class TrainConfig:
     max_steps: int
     save_steps: int
     learning_rate: float
-    lora_rank: int
-    lora_dropout: float
-    use_4bit: bool
     mixed_precision: str
     action_dim: int
     predict_stop_token: bool
@@ -349,14 +475,20 @@ def _set_seed(seed: int) -> None:
 def main() -> None:
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
-    parser = argparse.ArgumentParser(description="LoRA fine-tuning for OpenVLA (JSONL dataset)")
+    parser = argparse.ArgumentParser(description="Full fine-tuning for OpenVLA")
     parser.add_argument("--vla_path", type=str, default="openvla/openvla-7b", help="Base OpenVLA model id/path")
-    parser.add_argument("--data_jsonl", type=str, required=True, help="Path to JSONL dataset")
+    parser.add_argument("--data_jsonl", type=str, default=None, help="Path to JSONL dataset (mutually exclusive with --lerobot_repo_ids)")
+    parser.add_argument(
+        "--lerobot_repo_ids",
+        type=str,
+        default=None,
+        help="Comma-separated HuggingFace repo IDs for LeRobot datasets, e.g. coded190/pingti_palm_tree,coded190/isaac_so_arm101_vla",
+    )
     parser.add_argument(
         "--image_root",
         type=str,
         default=None,
-        help="Root directory for relative image paths (default: JSONL directory)",
+        help="Root directory for relative image paths (default: JSONL directory, only used with --data_jsonl)",
     )
     parser.add_argument(
         "--output_dir",
@@ -370,15 +502,6 @@ def main() -> None:
     parser.add_argument("--max_steps", type=int, default=1_000, help="Number of optimizer steps")
     parser.add_argument("--save_steps", type=int, default=200)
     parser.add_argument("--learning_rate", type=float, default=5e-4)
-
-    parser.add_argument("--lora_rank", type=int, default=32)
-    parser.add_argument("--lora_dropout", type=float, default=0.0)
-    parser.add_argument(
-        "--use_4bit",
-        action="store_true",
-        default=False,
-        help="Enable QLoRA-style 4-bit base model loading (saves VRAM, can reduce quality)",
-    )
 
     parser.add_argument(
         "--mixed_precision",
@@ -399,20 +522,26 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    # Fail fast on missing dataset paths (avoids wasting time downloading/loading the model).
-    data_jsonl_path = Path(args.data_jsonl)
-    if not data_jsonl_path.exists():
-        raise FileNotFoundError(
-            f"JSONL dataset not found: {data_jsonl_path.resolve()} (cwd={Path.cwd()})\n"
-            "Fix: place your dataset inside the mounted repo or pass an absolute path inside the container."
-        )
-    if args.image_root is not None:
-        image_root_path = Path(args.image_root)
-        if not image_root_path.exists():
+    # Validate dataset source: exactly one of --data_jsonl or --lerobot_repo_ids is required.
+    if args.data_jsonl is None and args.lerobot_repo_ids is None:
+        raise ValueError("One of --data_jsonl or --lerobot_repo_ids must be provided.")
+    if args.data_jsonl is not None and args.lerobot_repo_ids is not None:
+        raise ValueError("--data_jsonl and --lerobot_repo_ids are mutually exclusive.")
+
+    if args.data_jsonl is not None:
+        data_jsonl_path = Path(args.data_jsonl)
+        if not data_jsonl_path.exists():
             raise FileNotFoundError(
-                f"Image root not found: {image_root_path.resolve()} (cwd={Path.cwd()})\n"
-                "Fix: pass the correct --image_root (directory containing the images referenced by the JSONL)."
+                f"JSONL dataset not found: {data_jsonl_path.resolve()} (cwd={Path.cwd()})\n"
+                "Fix: place your dataset inside the mounted repo or pass an absolute path inside the container."
             )
+        if args.image_root is not None:
+            image_root_path = Path(args.image_root)
+            if not image_root_path.exists():
+                raise FileNotFoundError(
+                    f"Image root not found: {image_root_path.resolve()} (cwd={Path.cwd()})\n"
+                    "Fix: pass the correct --image_root (directory containing the images referenced by the JSONL)."
+                )
 
     if not torch.cuda.is_available():
         raise RuntimeError("Fine-tuning OpenVLA requires a CUDA-capable GPU.")
@@ -429,9 +558,16 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Save config for reproducibility
+    lerobot_repo_ids_list = (
+        [r.strip() for r in args.lerobot_repo_ids.split(",") if r.strip()]
+        if args.lerobot_repo_ids
+        else None
+    )
+
     train_cfg = TrainConfig(
         vla_path=args.vla_path,
         data_jsonl=args.data_jsonl,
+        lerobot_repo_ids=lerobot_repo_ids_list,
         image_root=args.image_root,
         output_dir=str(output_dir),
         batch_size=args.batch_size,
@@ -439,9 +575,6 @@ def main() -> None:
         max_steps=args.max_steps,
         save_steps=args.save_steps,
         learning_rate=args.learning_rate,
-        lora_rank=args.lora_rank,
-        lora_dropout=args.lora_dropout,
-        use_4bit=args.use_4bit,
         mixed_precision=args.mixed_precision,
         action_dim=args.action_dim,
         predict_stop_token=args.predict_stop_token,
@@ -461,50 +594,21 @@ def main() -> None:
     print(f"[INFO] Loading processor: {args.vla_path}")
     processor = AutoProcessor.from_pretrained(args.vla_path, trust_remote_code=True)
 
-    # Quantization (optional)
-    quant_config = None
-    model_dtype = torch.bfloat16
-    if args.use_4bit:
-        compute_dtype = torch.float16 if args.mixed_precision == "fp16" else torch.bfloat16
-        model_dtype = compute_dtype
-        quant_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_compute_dtype=compute_dtype,
-            bnb_4bit_quant_type="nf4",
-        )
-
-    # Load model
+    # Load model in bf16 — all parameters trained (no LoRA, no quantization)
     print(f"[INFO] Loading model: {args.vla_path}")
     model_kwargs = dict(
-        torch_dtype=model_dtype,
-        quantization_config=quant_config,
+        torch_dtype=torch.bfloat16,
         low_cpu_mem_usage=True,
         trust_remote_code=True,
-        # device_map={"": 0} if args.use_4bit else None,
     )
-    # Hint transformers to use eager attention to avoid SDPA dispatch.
     try:
         model = AutoModelForVision2Seq.from_pretrained(args.vla_path, attn_implementation="eager", **model_kwargs)
     except TypeError:
         model = AutoModelForVision2Seq.from_pretrained(args.vla_path, **model_kwargs)
 
-    if args.use_4bit:
-        model = prepare_model_for_kbit_training(model)
-    else:
-        model = model.to(device)
-
+    model = model.to(device)
     model.config.use_cache = False
-
-    # Apply LoRA
-    lora_config = LoraConfig(
-        r=args.lora_rank,
-        lora_alpha=args.lora_rank,
-        lora_dropout=args.lora_dropout,
-        target_modules="all-linear",
-        init_lora_weights="gaussian",
-    )
-    model = get_peft_model(model, lora_config)
-    model.print_trainable_parameters()
+    print(f"[INFO] Trainable parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
 
     # Dataset
     if not hasattr(processor, "image_processor"):
@@ -514,16 +618,31 @@ def main() -> None:
 
     action_tokenizer = DiscreteActionTokenizer(processor.tokenizer)
 
-    dataset = JsonlVlaDataset(
-        jsonl_path=Path(args.data_jsonl),
-        image_root=Path(args.image_root) if args.image_root else None,
-        tokenizer=processor.tokenizer,
-        image_transform=processor.image_processor.apply_transform,
-        vla_path=args.vla_path,
-        action_tokenizer=action_tokenizer,
-        action_dim=args.action_dim,
-        predict_stop_token=args.predict_stop_token,
-    )
+    if lerobot_repo_ids_list is not None:
+        dataset = LeRobotVlaDataset(
+            repo_ids=lerobot_repo_ids_list,
+            tokenizer=processor.tokenizer,
+            image_transform=processor.image_processor.apply_transform,
+            vla_path=args.vla_path,
+            action_tokenizer=action_tokenizer,
+            action_dim=args.action_dim,
+            predict_stop_token=args.predict_stop_token,
+        )
+        # Save norm stats alongside the adapter so inference can use them
+        norm_stats_path = output_dir / "action_norm_stats.json"
+        norm_stats_path.write_text(json.dumps(dataset.get_norm_stats(), indent=2), encoding="utf-8")
+        print(f"[INFO] Action norm stats saved to: {norm_stats_path}")
+    else:
+        dataset = JsonlVlaDataset(
+            jsonl_path=Path(args.data_jsonl),
+            image_root=Path(args.image_root) if args.image_root else None,
+            tokenizer=processor.tokenizer,
+            image_transform=processor.image_processor.apply_transform,
+            vla_path=args.vla_path,
+            action_tokenizer=action_tokenizer,
+            action_dim=args.action_dim,
+            predict_stop_token=args.predict_stop_token,
+        )
 
     collator = PaddedCollatorForActionPrediction(
         model_max_length=int(processor.tokenizer.model_max_length),
@@ -540,9 +659,8 @@ def main() -> None:
         pin_memory=True,
     )
 
-    # Optimizer
-    trainable_params = [p for p in model.parameters() if p.requires_grad]
-    optimizer = AdamW(trainable_params, lr=args.learning_rate)
+    # Optimizer — all parameters are trainable
+    optimizer = AdamW(model.parameters(), lr=args.learning_rate)
     model, optimizer, dataloader = accelerator.prepare(model, optimizer, dataloader)
 
     # Training loop
@@ -559,7 +677,7 @@ def main() -> None:
     if accelerator.is_main_process:
         wandb.init(
             project="openvla-isaac-arm101",
-            name="196GB-lora-run",          
+            name="192GB-fullft-run",
             config=asdict(train_cfg) # <--- This automatically tracks your exact CLI flags!
         )
 
@@ -633,12 +751,14 @@ def main() -> None:
                     print(f"[TRAIN] step={global_step} loss={loss.item():.4f}")
 
                 if args.save_steps > 0 and global_step % args.save_steps == 0:
-                    print(f"[INFO] Saving adapter checkpoint at step={global_step} -> {output_dir}")
-                    processor.save_pretrained(output_dir)
-                    accelerator.unwrap_model(model).save_pretrained(output_dir)
+                    ckpt_dir = output_dir / f"checkpoint-{global_step}"
+                    ckpt_dir.mkdir(parents=True, exist_ok=True)
+                    print(f"[INFO] Saving checkpoint at step={global_step} -> {ckpt_dir}")
+                    processor.save_pretrained(ckpt_dir)
+                    accelerator.unwrap_model(model).save_pretrained(ckpt_dir)
 
     if accelerator.is_main_process:
-        print(f"[INFO] Training complete. Saving final adapter -> {output_dir}")
+        print(f"[INFO] Training complete. Saving final model -> {output_dir}")
         processor.save_pretrained(output_dir)
         accelerator.unwrap_model(model).save_pretrained(output_dir)
 
