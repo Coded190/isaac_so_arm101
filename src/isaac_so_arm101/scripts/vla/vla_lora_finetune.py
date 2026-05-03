@@ -619,15 +619,17 @@ def main() -> None:
     action_tokenizer = DiscreteActionTokenizer(processor.tokenizer)
 
     if lerobot_repo_ids_list is not None:
-        dataset = LeRobotVlaDataset(
-            repo_ids=lerobot_repo_ids_list,
-            tokenizer=processor.tokenizer,
-            image_transform=processor.image_processor.apply_transform,
-            vla_path=args.vla_path,
-            action_tokenizer=action_tokenizer,
-            action_dim=args.action_dim,
-            predict_stop_token=args.predict_stop_token,
-        )
+        # Force GPU 1 to wait for GPU 0 to finish downloading the datasets
+        with accelerator.main_process_first():
+            dataset = LeRobotVlaDataset(
+                repo_ids=lerobot_repo_ids_list,
+                tokenizer=processor.tokenizer,
+                image_transform=processor.image_processor.apply_transform,
+                vla_path=args.vla_path,
+                action_tokenizer=action_tokenizer,
+                action_dim=args.action_dim,
+                predict_stop_token=args.predict_stop_token,
+            )
         # Save norm stats alongside the adapter so inference can use them
         norm_stats_path = output_dir / "action_norm_stats.json"
         norm_stats_path.write_text(json.dumps(dataset.get_norm_stats(), indent=2), encoding="utf-8")
