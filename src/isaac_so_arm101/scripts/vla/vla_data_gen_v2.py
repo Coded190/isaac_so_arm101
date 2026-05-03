@@ -1039,8 +1039,7 @@ def main():
         env.close()
     except Exception:
         pass
-    import os
-    os._exit(0)
+    os._exit(0)   # os is imported at module top
 
 
 if __name__ == "__main__":
