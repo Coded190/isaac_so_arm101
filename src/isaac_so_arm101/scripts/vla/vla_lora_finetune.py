@@ -12,6 +12,11 @@ Dataset options (mutually exclusive):
                      Actions are auto-normalized to [-1, 1] from dataset stats.
 
 Example command:
+    Run the script with this to use a config file:
+        LEROBOT_VIDEO_BACKEND=pyav NCCL_SHM_DISABLE=1 NCCL_P2P_DISABLE=1 NCCL_SOCKET_IFNAME=eno1 uv run accelerate launch --num_processes 2 vla_lora_finetune.py --config configs/lora_config.json
+    
+or directly with CLI flags:
+
   NCCL_SHM_DISABLE=1 NCCL_P2P_DISABLE=1 NCCL_SOCKET_IFNAME=eno1 \\
   uv run accelerate launch --num_processes 2 vla_lora_finetune.py \\
       --vla_path openvla/openvla-7b \\
@@ -496,6 +501,7 @@ def main() -> None:
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
     parser = argparse.ArgumentParser(description="Full fine-tuning for OpenVLA")
+    parser.add_argument("--config", type=str, default=None, help="Path to a JSON config file")
     parser.add_argument("--vla_path", type=str, default="openvla/openvla-7b", help="Base OpenVLA model id/path")
     parser.add_argument("--data_jsonl", type=str, default=None, help="Path to JSONL dataset (mutually exclusive with --lerobot_repo_ids)")
     parser.add_argument(
@@ -540,6 +546,15 @@ def main() -> None:
 
     parser.add_argument("--seed", type=int, default=0)
 
+    # First, quickly check if a config file was passed
+    temp_args, _ = parser.parse_known_args()
+    if temp_args.config:
+        with open(temp_args.config, 'r') as f:
+            config_defaults = json.load(f)
+            # This sets the JSON values as the new baseline defaults
+            parser.set_defaults(**config_defaults)
+
+    # Now parse the actual arguments. Any explicit CLI flags will override the JSON defaults!
     args = parser.parse_args()
 
     # Validate dataset source: exactly one of --data_jsonl or --lerobot_repo_ids is required.
