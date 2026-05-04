@@ -795,6 +795,8 @@ def main() -> None:
         print(f"[INFO] Training complete. Saving final model -> {output_dir}")
         processor.save_pretrained(output_dir)
         accelerator.unwrap_model(model).save_pretrained(output_dir)
+        
+    accelerator.wait_for_everyone()
 
 
 if __name__ == "__main__":
