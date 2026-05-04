@@ -18,6 +18,25 @@ Example command:
       --lerobot_repo_ids coded190/pingti_palm_tree,coded190/isaac_so_arm101_vla \\
       --output_dir outputs/openvla_fullft \\
       --batch_size 16 --learning_rate 5e-4 --max_steps 2500
+      
+    LEROBOT_VIDEO_BACKEND=pyav NCCL_SHM_DISABLE=1 NCCL_P2P_DISABLE=1 NCCL_SOCKET_IFNAME=eno1 uv run accelerate launch --num_processes 2 vla_lora_finetune.py \
+      --vla_path openvla/openvla-7b \
+      --lerobot_repo_ids coded190/pingti_palm_tree,coded190/isaac_so_arm101_vla \
+      --output_dir outputs/openvla_fullft \
+      --batch_size 16 --learning_rate 5e-4 --max_steps 2500
+      
+    or
+    
+    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+    NCCL_SHM_DISABLE=1 NCCL_P2P_DISABLE=1 NCCL_SOCKET_IFNAME=eno1 \
+    accelerate launch --num_processes 2 --mixed_precision bf16 vla_lora_finetune.py \
+        --vla_path openvla/openvla-7b \
+        --lerobot_repo_ids coded190/pingti_palm_tree,coded190/isaac_so_arm101_vla \
+        --output_dir outputs/openvla_fullft \
+        --batch_size 4 \
+        --grad_accum_steps 4 \
+        --learning_rate 5e-4 \
+        --max_steps 2500
 
 Notes:
   - OpenVLA is loaded with `trust_remote_code=True`.
@@ -323,7 +342,7 @@ class LeRobotVlaDataset(Dataset):
 
         for ds_idx, repo_id in enumerate(repo_ids):
             print(f"[INFO] Loading LeRobot dataset: {repo_id}")
-            ds = _LeRobotDataset(repo_id)
+            ds = _LeRobotDataset(repo_id, video_backend="pyav")
             self._lerobot_datasets.append(ds)
 
             # Scan actions from Parquet (no video decoding needed for stats)
