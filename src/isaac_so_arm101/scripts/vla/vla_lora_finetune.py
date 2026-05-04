@@ -62,6 +62,7 @@ from torch.utils.data import DataLoader, Dataset
 from transformers import AutoModelForVision2Seq, AutoProcessor
 import wandb
 from accelerate import Accelerator, DistributedDataParallelKwargs
+from peft import LoraConfig, get_peft_model
 
 IGNORE_INDEX = -100
 
@@ -627,7 +628,18 @@ def main() -> None:
 
     model = model.to(device)
     model.config.use_cache = False
-    print(f"[INFO] Trainable parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
+    # --- ADD LORA WRAPPER HERE ---
+    print("[INFO] Applying LoRA adapters...")
+    lora_config = LoraConfig(
+        r=32,
+        lora_alpha=32,
+        target_modules=["q_proj", "v_proj"], # Targets the attention layers
+        lora_dropout=0.05,
+        bias="none",
+        task_type="CAUSAL_LM"
+    )
+    model = get_peft_model(model, lora_config)
+    model.print_trainable_parameters()
 
     # Dataset
     if not hasattr(processor, "image_processor"):
@@ -680,8 +692,9 @@ def main() -> None:
         pin_memory=True,
     )
 
-    # Optimizer — all parameters are trainable
-    optimizer = AdamW(model.parameters(), lr=args.learning_rate)
+    # Optimizer — ONLY LoRA parameters are trainable
+    trainable_params = [p for p in model.parameters() if p.requires_grad]
+    optimizer = AdamW(trainable_params, lr=args.learning_rate)
     model, optimizer, dataloader = accelerator.prepare(model, optimizer, dataloader)
 
     # Training loop
