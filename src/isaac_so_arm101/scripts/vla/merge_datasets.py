@@ -17,8 +17,11 @@ def main(input_dir, output_repo_id):
     for env_name in env_dirs:
         env_path = os.path.join(input_dir, env_name)
         try:
-            # We load each dataset pointing to its specific local folder
-            ds = LeRobotDataset(repo_id=f"local/{env_name}", root=env_path)
+            # Match the repo_id pattern used by vla_data_gen.py / vla_data_gen_v2.py
+            # ("local/vla_palm_dataset_env_XXXX") so LeRobot doesn't think the
+            # local cache is stale and try to re-fetch from HuggingFace.
+            env_repo_id = f"local/vla_palm_dataset_{env_name}"
+            ds = LeRobotDataset(repo_id=env_repo_id, root=env_path)
             
             if ds.num_episodes > 0:
                 datasets_to_merge.append(ds)

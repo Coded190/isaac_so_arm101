@@ -95,6 +95,13 @@ import carb
 # out the viewport. Console noise is filtered by the Python stderr
 # wrapper at the top of this file plus 2>/dev/null in the launch command.
 carb.settings.get_settings().set_string("/log/level", "error")
+# PhysX error/warning budget: default ~50 → kills sim with 10+ envs (each
+# palm has ~50 leaf joints throwing PxJoint::setActors warnings). Raise it.
+carb.settings.get_settings().set_int("/persistent/omni/physx/persistentErrorMaxCount", 1000000)
+carb.settings.get_settings().set_int("/physics/numThreads", 0)  # default
+# Suppress the cosmetic palm-joint errors entirely from the PhysX channel:
+carb.settings.get_settings().set_string("/log/channels/omni.physx.plugin", "fatal")
+carb.settings.get_settings().set_string("/log/channels/omni.kit.notification_manager.manager", "fatal")
 simulation_app = app_launcher.app
 
 import cv2
@@ -495,13 +502,19 @@ def randomize_robot_root_pose(env, stage, palm_root_paths, episode_rng,
     env_ids_t = torch.as_tensor(env_ids, device=device, dtype=torch.long)
 
     new_root = robot.data.default_root_state[env_ids_t].clone()
+    # default_root_state is in env-local frame; trunk_xy from get_crown_centroid
+    # is world-frame. With multi-env (env_spacing > 0), env origins are offset
+    # in world, so we must add the env origin to default_xy to compare apples
+    # to apples. Single-env case has env_origin=(0,0,0) and is unchanged.
+    env_origins = env.unwrapped.scene.env_origins[env_ids_t, :2].cpu().numpy().astype(np.float64)
     trunk_xys = []
     for i, env_id in enumerate(env_ids):
         palm_root_path = palm_root_paths[env_id]
         crown = get_crown_centroid(stage, palm_root_path)
         trunk_xy = np.array([float(crown[0]), float(crown[1])], dtype=np.float64)
         trunk_xys.append(trunk_xy)
-        default_xy = new_root[i, :2].cpu().numpy().astype(np.float64)
+        default_xy_local = new_root[i, :2].cpu().numpy().astype(np.float64)
+        default_xy = default_xy_local + env_origins[i]   # local → world
         rel = default_xy - trunk_xy
         radius0 = float(np.linalg.norm(rel))
         bearing0 = float(np.arctan2(rel[1], rel[0]))
@@ -824,6 +837,10 @@ def main():
                 fps=30,
                 features=features,
             )
+            # Force immediate metadata flush after every save_episode so that
+            # episode index files exist on disk even if the script exits via
+            # os._exit(0) before normal Python finalization can flush buffers.
+            env_dataset.meta.metadata_buffer_size = 1
             datasets.append(env_dataset)
         abs_save_path = os.path.abspath(args_cli.dataset_root)
         print(f"[INFO]: Initialized {num_envs} per-env LeRobot datasets.")
