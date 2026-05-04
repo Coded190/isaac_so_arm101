@@ -69,6 +69,14 @@ parser.add_argument(
         "0 = default position, 90 = 90° CW, 180 = opposite side, 270 = 90° CCW."
     ),
 )
+parser.add_argument(
+    "--yaw_cycle",
+    action="store_true",
+    help=(
+        "Cycle through yaw angles [0, 90, 180, 270] on each episode reset, "
+        "collecting data from all four sides automatically. Overrides --yaw_angle."
+    ),
+)
 
 # recorder_parameter
 parser.add_argument("--record", action="store_true", help="whether to enable record function")
@@ -86,6 +94,19 @@ parser.add_argument("--quality", action="store_true", help="whether to enable qu
 parser.add_argument("--use_lerobot_recorder", action="store_true", help="whether to use lerobot recorder.")
 parser.add_argument("--lerobot_dataset_repo_id", type=str, default=None, help="Lerobot Dataset repository ID.")
 parser.add_argument("--lerobot_dataset_fps", type=int, default=30, help="Lerobot Dataset frames per second.")
+parser.add_argument(
+    "--vla_format_record",
+    action="store_true",
+    help=(
+        "Record directly in VLA-compatible LeRobot format matching vla_data_gen.py schema. "
+        "Requires --lerobot_dataset_repo_id. Use --step_hz to match --lerobot_dataset_fps."
+    ),
+)
+parser.add_argument(
+    "--vla_push_to_hub",
+    action="store_true",
+    help="Push the VLA LeRobot dataset to HuggingFace Hub after finalization.",
+)
 
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
@@ -101,8 +122,10 @@ simulation_app = app_launcher.app
 
 import os
 import time
+from pathlib import Path
 
 import gymnasium as gym
+import numpy as np
 import torch
 from isaaclab.envs import DirectRLEnv, ManagerBasedRLEnv
 from isaaclab.managers import DatasetExportMode, TerminationTermCfg
@@ -230,6 +253,64 @@ def reposition_robot_at_yaw(env, yaw_deg: float, palm_prim_path: str = "/World/e
     # Isaac Lab quaternion convention: (w, x, y, z)
     rot = torch.tensor([[quat[0], quat[1], quat[2], quat[3]]], device=env.device)
     robot.write_root_pose_to_sim(torch.cat([pos, rot], dim=-1))
+
+
+def disable_palm_collision(stage, palm_prim_path: str = "/World/envs/env_0/Scene/Palm"):
+    """Disable physics collision on all palm tree prims so the arm passes through branches."""
+    from pxr import UsdPhysics, Usd
+
+    palm_prim = stage.GetPrimAtPath(palm_prim_path)
+    if not palm_prim.IsValid():
+        print(f"[WARN] Palm prim not found at {palm_prim_path}, skipping collision disable.")
+        return
+    count = 0
+    for prim in Usd.PrimRange(palm_prim):
+        if prim.HasAPI(UsdPhysics.CollisionAPI):
+            UsdPhysics.CollisionAPI(prim).GetCollisionEnabledAttr().Set(False)
+            count += 1
+    if count:
+        print(f"[INFO] Disabled collision on {count} palm prim(s) under {palm_prim_path}")
+
+
+_VLA_TASK_DESCRIPTION = (
+    "Move end effector above palm crown, angle end effector downward, "
+    "and hold while end effector is spraying."
+)
+
+
+def _vla_quat_multiply(q1, q2):
+    """Hamilton product of two quaternions in [w, x, y, z] order."""
+    w1, x1, y1, z1 = q1
+    w2, x2, y2, z2 = q2
+    return np.array([
+        w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
+        w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+        w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
+        w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
+    ])
+
+
+def _vla_quat_conjugate(q):
+    """Conjugate of a unit quaternion [w, x, y, z]."""
+    return np.array([q[0], -q[1], -q[2], -q[3]])
+
+
+def _vla_quat_to_axis_angle(q):
+    """Convert unit quaternion [w, x, y, z] to axis-angle 3-vector."""
+    q = np.asarray(q, dtype=np.float64)
+    n = np.linalg.norm(q)
+    if n < 1e-9:
+        return np.zeros(3)
+    q = q / n
+    if q[0] < 0.0:
+        q = -q
+    w = float(np.clip(q[0], -1.0, 1.0))
+    sin_half = np.sqrt(max(0.0, 1.0 - w * w))
+    if sin_half < 1e-6:
+        return np.zeros(3)
+    angle = 2.0 * np.arccos(w)
+    axis = q[1:4] / sin_half
+    return axis * angle
 
 
 def manual_terminate(env: ManagerBasedRLEnv | DirectRLEnv, success: bool):
@@ -409,13 +490,99 @@ def main():  # noqa: C901
     teleop_interface.display_controls()
     rate_limiter = RateLimiter(args_cli.step_hz)
 
+    # Yaw cycling setup
+    _YAW_CYCLE = [0.0, 90.0, 180.0, 270.0]
+    yaw_cycle_idx = 0
+
+    def _apply_yaw():
+        if args_cli.yaw_cycle:
+            angle = _YAW_CYCLE[yaw_cycle_idx % len(_YAW_CYCLE)]
+            print(f"[YAW] Episode yaw = {angle}° (step {yaw_cycle_idx + 1})")
+            reposition_robot_at_yaw(env, angle)
+        elif args_cli.yaw_angle is not None:
+            reposition_robot_at_yaw(env, args_cli.yaw_angle)
+
     # reset environment
     if hasattr(env, "initialize"):
         env.initialize()
     env.reset()
-    if args_cli.yaw_angle is not None:
-        reposition_robot_at_yaw(env, args_cli.yaw_angle)
+    _apply_yaw()
+    import omni.usd as _omni_usd
+    _stage = _omni_usd.get_context().get_stage()
+    disable_palm_collision(_stage)
     teleop_interface.reset()
+
+    # VLA-format recording setup (matches vla_data_gen.py schema)
+    vla_dataset = None
+    vla_gripper_body_idx = None
+    vla_gripper_joint_idx = None
+    vla_prev_ee_pos = None
+    vla_prev_ee_quat = None
+    vla_episode_success = False
+    vla_episode_frames = 0
+    vla_step_counter = 0
+    vla_record_every = 1
+    vla_saved_episodes = 0
+
+    if args_cli.vla_format_record:
+        assert args_cli.lerobot_dataset_repo_id, "--lerobot_dataset_repo_id is required with --vla_format_record"
+        try:
+            from lerobot.datasets.lerobot_dataset import LeRobotDataset as _LeRobotDataset
+        except ImportError as exc:
+            raise ImportError("lerobot not found — install it in the leisaac conda env") from exc
+        from PIL import Image as _PILImage
+        import cv2 as _cv2
+
+        _robot = env.scene["robot"]
+        _gripper_body_indices, _ = _robot.find_bodies("moving_gripper")
+        vla_gripper_body_idx = _gripper_body_indices[0]
+        vla_gripper_joint_idx = list(_robot.data.joint_names).index("gripper_moving")
+
+        del _robot
+        # Match the synthetic dataset image size (256x256) for VLA fine-tuning compatibility
+        IMG_H, IMG_W = 256, 256
+
+        num_dof = env.scene["robot"].data.joint_pos.shape[-1]
+        _vla_features = {
+            "env_id": {"dtype": "int64", "shape": (1,), "names": None},
+            "observation.state": {
+                "dtype": "float32",
+                "shape": (num_dof,),
+                "names": [f"joint_{i}" for i in range(num_dof)],
+            },
+            "observation.state.ee_pose": {
+                "dtype": "float32",
+                "shape": (7,),
+                "names": ["x", "y", "z", "qw", "qx", "qy", "qz"],
+            },
+            "observation.images.wrist_camera": {
+                "dtype": "video",
+                "shape": (3, IMG_H, IMG_W),
+                "names": ["c", "h", "w"],
+            },
+            "action": {
+                "dtype": "float32",
+                "shape": (7,),
+                "names": ["dx", "dy", "dz", "droll", "dpitch", "dyaw", "gripper"],
+            },
+        }
+        import shutil
+        _cache_dir = Path.home() / ".cache" / "huggingface" / "lerobot" / args_cli.lerobot_dataset_repo_id
+        if _cache_dir.exists():
+            print(f"[VLA] Removing existing dataset dir: {_cache_dir}")
+            shutil.rmtree(_cache_dir)
+        vla_dataset = _LeRobotDataset.create(
+            repo_id=args_cli.lerobot_dataset_repo_id,
+            fps=args_cli.lerobot_dataset_fps,
+            robot_type="pingti_arm_v4",
+            features=_vla_features,
+        )
+        vla_record_every = max(1, round(args_cli.step_hz / args_cli.lerobot_dataset_fps))
+        print(
+            f"[VLA] Dataset: {args_cli.lerobot_dataset_repo_id} | "
+            f"fps={args_cli.lerobot_dataset_fps} | image={IMG_H}×{IMG_W} | "
+            f"record every {vla_record_every} sim steps"
+        )
 
     resume_recorded_demo_count = 0
     if args_cli.record and args_cli.resume:
@@ -447,8 +614,13 @@ def main():  # noqa: C901
                     should_reset_task_success = False
                     if args_cli.record:
                         manual_terminate(env, True)
+                    if vla_dataset is not None:
+                        vla_episode_success = True
                 if should_reset_recording_instance:
                     env.reset()
+                    yaw_cycle_idx += 1
+                    _apply_yaw()
+                    disable_palm_collision(_stage)
                     should_reset_recording_instance = False
                     if start_record_state:
                         if args_cli.record:
@@ -456,6 +628,26 @@ def main():  # noqa: C901
                         start_record_state = False
                     if args_cli.record:
                         manual_terminate(env, False)
+                    # VLA episode finalization
+                    if vla_dataset is not None:
+                        if vla_episode_success and vla_episode_frames >= 10:
+                            vla_dataset.save_episode()
+                            vla_saved_episodes += 1
+                            print(
+                                f"[VLA] Saved episode #{vla_saved_episodes} "
+                                f"({vla_episode_frames} frames)."
+                            )
+                        elif vla_episode_frames > 0:
+                            vla_dataset.clear_episode_buffer()
+                            print(
+                                f"[VLA] Discarded episode "
+                                f"(success={vla_episode_success}, frames={vla_episode_frames})."
+                            )
+                        vla_episode_success = False
+                        vla_episode_frames = 0
+                        vla_step_counter = 0
+                        vla_prev_ee_pos = None
+                        vla_prev_ee_quat = None
                     # print out the current demo count if it has changed
                     if (
                         args_cli.record
@@ -474,6 +666,13 @@ def main():  # noqa: C901
                     ):
                         print(f"All {args_cli.num_demos} demonstrations recorded. Exiting the app.")
                         break
+                    if (
+                        vla_dataset is not None
+                        and args_cli.num_demos > 0
+                        and vla_saved_episodes >= args_cli.num_demos
+                    ):
+                        print(f"[VLA] All {args_cli.num_demos} demonstrations recorded. Exiting.")
+                        break
 
                 elif actions is None:
                     env.render()
@@ -482,7 +681,51 @@ def main():  # noqa: C901
                     if not start_record_state:
                         if args_cli.record:
                             print("Start Recording!!!")
+                        if vla_dataset is not None:
+                            print("[VLA] Recording started.")
                         start_record_state = True
+
+                    # VLA format recording: capture obs BEFORE step, compute retrospective EE delta
+                    if vla_dataset is not None:
+                        vla_step_counter += 1
+                        if vla_step_counter % vla_record_every == 0:
+                            _robot = env.scene["robot"]
+                            _ee_pos = _robot.data.body_pos_w[0, vla_gripper_body_idx].cpu().numpy()
+                            _ee_quat = _robot.data.body_quat_w[0, vla_gripper_body_idx].cpu().numpy()
+                            _joint_pos = _robot.data.joint_pos[0].cpu().numpy()
+                            _img = env.scene["wrist"].data.output["rgb"][0].cpu().numpy()
+                            if _img.shape[-1] == 4:
+                                _img_rgb = _cv2.cvtColor(_img.astype(np.uint8), _cv2.COLOR_RGBA2RGB)
+                            else:
+                                _img_rgb = _img.astype(np.uint8)
+                            if _img_rgb.shape[0] != IMG_H or _img_rgb.shape[1] != IMG_W:
+                                _img_rgb = _cv2.resize(_img_rgb, (IMG_W, IMG_H), interpolation=_cv2.INTER_LINEAR)
+                            if vla_prev_ee_pos is None:
+                                _pos_delta = np.zeros(3, dtype=np.float32)
+                                _orient_delta = np.zeros(3, dtype=np.float32)
+                            else:
+                                _pos_delta = (_ee_pos - vla_prev_ee_pos).astype(np.float32)
+                                _q_delta = _vla_quat_multiply(
+                                    _ee_quat, _vla_quat_conjugate(vla_prev_ee_quat)
+                                )
+                                _orient_delta = _vla_quat_to_axis_angle(_q_delta).astype(np.float32)
+                            _gripper_val = float(_joint_pos[vla_gripper_joint_idx])
+                            vla_dataset.add_frame({
+                                "env_id": np.array([0], dtype=np.int64),
+                                "task": _VLA_TASK_DESCRIPTION,
+                                "observation.state": _joint_pos.astype(np.float32),
+                                "observation.state.ee_pose": np.concatenate(
+                                    [_ee_pos, _ee_quat]
+                                ).astype(np.float32),
+                                "observation.images.wrist_camera": _PILImage.fromarray(_img_rgb),
+                                "action": np.concatenate(
+                                    [_pos_delta, _orient_delta, [_gripper_val]]
+                                ).astype(np.float32),
+                            })
+                            vla_prev_ee_pos = _ee_pos
+                            vla_prev_ee_quat = _ee_quat
+                            vla_episode_frames += 1
+
                     env.step(actions)
                 if rate_limiter:
                     rate_limiter.sleep(env)
@@ -500,11 +743,23 @@ def main():  # noqa: C901
         # finalize the recorder manager
         if args_cli.record and hasattr(env.recorder_manager, "finalize"):
             env.recorder_manager.finalize()
+        # finalize VLA dataset
+        if vla_dataset is not None:
+            print(f"[VLA] Finalizing dataset ({vla_saved_episodes} episodes saved)...")
+            vla_dataset.finalize()
+            local_path = Path.home() / ".cache" / "huggingface" / "lerobot" / args_cli.lerobot_dataset_repo_id
+            print(f"[VLA] Dataset saved locally: {local_path}")
+            if args_cli.vla_push_to_hub:
+                print(f"[VLA] Pushing to HuggingFace Hub: {args_cli.lerobot_dataset_repo_id} ...")
+                vla_dataset.push_to_hub()
+                print(f"[VLA] Upload complete: https://huggingface.co/datasets/{args_cli.lerobot_dataset_repo_id}")
+            else:
+                print(f"[VLA] To push later: add --vla_push_to_hub, or run: huggingface-cli upload {args_cli.lerobot_dataset_repo_id} {local_path}")
         # close the simulator
         env.close()
         simulation_app.close()
 
 
 if __name__ == "__main__":
-    # run the main functionwcenes/kitchen_with_or
+    # run the main function
     main()
