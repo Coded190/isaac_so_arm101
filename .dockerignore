@@ -1,4 +1,8 @@
-.git
-.env
+# .dockerignore
 .venv
-outputs
+.env
+.git
+__pycache__
+*.pyc
+outputs/
+data/  # Don't bake your huge datasets into the image; mount them instead
