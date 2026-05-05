@@ -80,3 +80,4 @@ logs/
 *.h5
 *.hdf5
 *.tar.gz
+**/vla_finetune_data
