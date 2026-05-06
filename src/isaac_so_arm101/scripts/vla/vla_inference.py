@@ -124,11 +124,18 @@ def main():
             stats = json.load(f)
             action_min = np.array(stats["action_norm_min"], dtype=np.float32)
             action_max = np.array(stats["action_norm_max"], dtype=np.float32)
+            
+        vla_base = vla.get_base_model() if hasattr(vla, "get_base_model") else vla
+        vla_base.norm_stats["isaac_arm101"] = {
+            "action": {"q01": action_min, "q99": action_max}
+        }
+        unnorm_key = "isaac_arm101"
     else:
         print("[WARN]: No LoRA adapter found; running base model only.")
         # Fallback to prevent crash if running without LoRA
         action_min = np.zeros(7, dtype=np.float32)
         action_max = np.zeros(7, dtype=np.float32)
+        unnorm_key = "bridge_orig"
 
     print("[INFO]: Setting up Isaac Lab environment ...")
     env_cfg = parse_env_cfg(
@@ -164,15 +171,7 @@ def main():
 
             inputs = processor(TASK_PROMPT, image_pil).to("cuda:0", dtype=torch.bfloat16)
             
-            # 1. Ask OpenVLA for the normalized actions (between -1 and 1) by setting unnorm_key=None
-            vla_action_norm = vla.predict_action(**inputs, unnorm_key=None, do_sample=False)
-
-            # 2. Convert to numpy array
-            vla_action_norm = np.array(vla_action_norm)
-
-            # 3. Mathematically un-normalize the actions back to physical joint space
-            # Formula: unnorm = ((norm + 1) / 2) * (max - min) + min
-            vla_action = ((vla_action_norm + 1.0) / 2.0) * (action_max - action_min) + action_min
+            vla_action = vla.predict_action(**inputs, unnorm_key=unnorm_key, do_sample=False)
 
             arm_cmd = torch.tensor(vla_action[:6], device=env.unwrapped.device)
             gripper_cmd = torch.tensor([vla_action[6] * 1.57], device=env.unwrapped.device)
