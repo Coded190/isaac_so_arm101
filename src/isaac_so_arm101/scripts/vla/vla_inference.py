@@ -74,6 +74,8 @@ from peft import PeftModel
 
 import isaac_so_arm101.tasks  # registers the custom task IDs
 from isaaclab_tasks.utils import parse_env_cfg
+import json
+import numpy as np
 
 
 MODEL_ID = "openvla/openvla-7b"
@@ -112,11 +114,21 @@ def main():
     )
 
     adapter_path = find_adapter_path()
+    # ADD THE JSON LOADING HERE
     if adapter_path is not None:
         print(f"[INFO]: Loading LoRA adapter from {adapter_path}")
         vla = PeftModel.from_pretrained(vla, adapter_path)
+        
+        stats_path = os.path.join(adapter_path, "action_norm_stats.json")
+        with open(stats_path, "r") as f:
+            stats = json.load(f)
+            action_min = np.array(stats["action_norm_min"], dtype=np.float32)
+            action_max = np.array(stats["action_norm_max"], dtype=np.float32)
     else:
         print("[WARN]: No LoRA adapter found; running base model only.")
+        # Fallback to prevent crash if running without LoRA
+        action_min = np.zeros(7, dtype=np.float32)
+        action_max = np.zeros(7, dtype=np.float32)
 
     print("[INFO]: Setting up Isaac Lab environment ...")
     env_cfg = parse_env_cfg(
@@ -151,7 +163,16 @@ def main():
             image_pil = Image.fromarray(raw_image)
 
             inputs = processor(TASK_PROMPT, image_pil).to("cuda:0", dtype=torch.bfloat16)
-            vla_action = vla.predict_action(**inputs, unnorm_key="bridge_orig", do_sample=False)
+            
+            # 1. Ask OpenVLA for the normalized actions (between -1 and 1) by setting unnorm_key=None
+            vla_action_norm = vla.predict_action(**inputs, unnorm_key=None, do_sample=False)
+
+            # 2. Convert to numpy array
+            vla_action_norm = np.array(vla_action_norm)
+
+            # 3. Mathematically un-normalize the actions back to physical joint space
+            # Formula: unnorm = ((norm + 1) / 2) * (max - min) + min
+            vla_action = ((vla_action_norm + 1.0) / 2.0) * (action_max - action_min) + action_min
 
             arm_cmd = torch.tensor(vla_action[:6], device=env.unwrapped.device)
             gripper_cmd = torch.tensor([vla_action[6] * 1.57], device=env.unwrapped.device)
