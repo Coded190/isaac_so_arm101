@@ -205,6 +205,7 @@ class ReachVlaEnvCfg(PingTiReachEnvCfg):
     def __post_init__(self):
         # This populates the robot, rewards, and other settings from the PingTiReachEnvCfg
         super().__post_init__()
+        self.num_rerenders_on_reset = 1
 
         # Save the robot, swap to our camera scene, and put robot back
         configured_robot = self.scene.robot
@@ -215,7 +216,7 @@ class ReachVlaEnvCfg(PingTiReachEnvCfg):
         self.actions.arm_action = DifferentialInverseKinematicsActionCfg(
             asset_name="robot", 
             joint_names=["base_yaw", "shoulder_pitch", "elbow_pitch", "wrist_pitch", "wrist_roll"],
-            body_name="sts3215_gripper", # EXACT match from URDF for the 5th joint's child link
+            body_name="moving_gripper", # Match the oracle/telemetry frame used in vla_data_gen.py
             controller=DifferentialIKControllerCfg(
                 command_type="pose", 
                 use_relative_mode=True, 
