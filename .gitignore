@@ -1,3 +1,6 @@
+.env
+.env.local
+
 # Virtual environments
 .venv
 
@@ -51,3 +54,30 @@ logs/
 
 # Pre-Trained Checkpoints
 /.pretrained_checkpoints/
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Model Weights
+*.safetensors
+*.pth
+*.pt
+*.ckpt
+*.bin
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+
+# Linters and Formatters
+.ruff_cache/
+.mypy_cache/
+
+# Datasets and Large Files
+*.pkl
+*.h5
+*.hdf5
+*.tar.gz
+**/vla_finetune_data

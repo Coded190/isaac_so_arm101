@@ -1,0 +1,14 @@
+{
+    "vla_path": "openvla/openvla-7b",
+    "lerobot_repo_ids": "coded190/pingti_palm_tree,coded190/isaac_so_arm101_vla_v2",
+    "output_dir": "outputs/openvla_lora",
+    "batch_size": 16,
+    "grad_accum_steps": 1,
+    "max_steps": 2500,
+    "save_steps": 200,
+    "learning_rate": 0.0005,
+    "mixed_precision": "bf16",
+    "action_dim": 7,
+    "predict_stop_token": true,
+    "seed": 0
+}
