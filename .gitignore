@@ -55,6 +55,9 @@ logs/
 # Pre-Trained Checkpoints
 /.pretrained_checkpoints/
 
+# VLA Tree Dataset
+vla_tree_dataset/
+vla_tree_dataset_*/
 # IDEs and Editors
 .vscode/
 .idea/

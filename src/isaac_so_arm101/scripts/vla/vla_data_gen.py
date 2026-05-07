@@ -26,8 +26,9 @@ carb.settings.get_settings().set_string("/log/level", "error")
 simulation_app = app_launcher.app 
 
 # Standard library and ML imports 
-import os 
-import cv2 
+import os
+import shutil
+import cv2
 import torch 
 import numpy as np 
 import gymnasium as gym 
@@ -49,8 +50,20 @@ from isaaclab_tasks.utils import parse_env_cfg
 # action[0:3] -> relative position delta (meters) for the DifferentialIKController 
 # action[3:6] -> relative orientation delta (axis-angle, radians) — left at zero here 
 # action[6] -> absolute gripper joint target (radians), NOT a spray flag 
-ACTION_CLAMP = 0.5 # Max Cartesian delta per step (meters). Small → stable IK, larger → faster motion. 
+ACTION_CLAMP = 0.05 # Max Cartesian delta per step (meters). Small → stable IK, larger → faster motion. 
 POSITION_GAIN = 0.75 # Proportional gain for Cartesian position tracking. 
+HOVER_OFFSET_Z = 0.13 # Vertical offset above the target for the approach waypoint.
+
+# End-effector orientation target: gripper "nozzle" pointing straight down (-world_Z).
+# Quaternion is [w, x, y, z]. The right value depends on which local axis of the
+# gripper body is the nozzle direction. Common options to try:
+#   [0.7071, 0.0, 0.7071, 0.0]  -> 90 deg around Y (local +X -> -world_Z)  [default]
+#   [0.7071, 0.7071, 0.0, 0.0]  -> 90 deg around X (local +Y -> -world_Z)
+#   [0.0, 1.0, 0.0, 0.0]        -> 180 deg around X (flips Z, points local +Z down)
+#   [0.0, 0.0, 1.0, 0.0]        -> 180 deg around Y
+DOWN_QUAT = np.array([0.2588, 0.9659, 0.0, 0.0])
+ORIENTATION_CLAMP = 0.2 # Max rotation delta per step (radians), matches ACTION_CLAMP spirit.
+
 SPRAY_DURATION = 60 # Sim steps to "spray" at the target (~2 s at 30 Hz). 
 
 # Gripper joint targets. Since action[6] is the absolute joint position, we open 

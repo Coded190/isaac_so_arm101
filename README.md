@@ -59,6 +59,12 @@ Test with VLA model.
 uv run vla_inference --task Isaac-PING-TI-VLA-v0 --num_envs 1 --enable_cameras
 ```
 
+Test with inference.
+
+```bash
+OPENVLA_ADAPTER_PATH="./outputs/openvla_lora_model" uv run vla_inference.py --task Isaac-PING-TI-VLA-v0 --num_envs 1 --enable_cameras
+```
+
 Train a RL-based IK policy.
 
 ```bash
