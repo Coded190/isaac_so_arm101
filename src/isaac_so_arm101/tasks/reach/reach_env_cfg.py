@@ -59,7 +59,8 @@ class ReachSceneCfg(InteractiveSceneCfg):
     custom_env = AssetBaseCfg(
         prim_path="{ENV_REGEX_NS}/Scene",
         spawn=sim_utils.UsdFileCfg(
-            usd_path="/home/cirplab/kantas/isaac_data/palm_tree_models/blender/pretoria_gardens_4k/pretoria_gardens_4k_env_v2.usdc",
+            # usd_path="/home/cirp-lab/moore/palm_tree_models/blender/pretoria_gardens_4k/pretoria_gardens_4k_env_v2.usdc",
+            usd_path="/home/cirplab/moore/isaac_data/palm_tree_models/blender/pretoria_gardens_4k/pretoria_gardens_4k_env_v2.usdc",
         ),
     )
 
@@ -214,7 +215,7 @@ class ReachEnvCfg(ManagerBasedRLEnvCfg):
 
     # Scene settings
     # scene: ReachSceneCfg = ReachSceneCfg(num_envs=4096, env_spacing=2.5)
-    scene: ReachSceneCfg = ReachSceneCfg(num_envs=4096, env_spacing=50.0)
+    scene: ReachSceneCfg = ReachSceneCfg(num_envs=4096, env_spacing=70.0)
     # Basic settings
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()
