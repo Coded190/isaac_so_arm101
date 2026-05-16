@@ -14,7 +14,7 @@ except ImportError:
     print("[ERROR]: 'lerobot' package not found. Please install it.")
     exit(1)
 
-def prepare_data():
+def main():
     hf_repo_id = "coded190/isaac_so_arm101_vla" # Your dataset
     output_dir = "vla_finetune_data"
     images_dir = os.path.join(output_dir, "images")
@@ -107,4 +107,4 @@ def prepare_data():
     print("You can now safely run your fine-tuning script!")
 
 if __name__ == "__main__":
-    prepare_data()
+    main()

@@ -5,7 +5,7 @@
 """Record a simple JSONL dataset (images + instruction + action) from Isaac Lab.
 
 This is a lightweight helper to generate the on-disk dataset that
-`vla_lora_finetune.py` expects:
+training/train_lora.py or training/train_full.py expect:
 
   data/vla_train/
     dataset.jsonl
@@ -25,7 +25,7 @@ Important:
         The `openvla` policy records actions predicted by OpenVLA (optionally + LoRA).
 
 Run (inside the Isaac Sim container):
-  python src/isaac_so_arm101/scripts/vla/vla_record_dataset.py \
+  uv run record_dataset \
         --task Isaac-PING-TI-VLA-v0 \
     --num_steps 2000 \
     --instruction "reach the target" \
@@ -33,7 +33,7 @@ Run (inside the Isaac Sim container):
         --headless
 
 Then fine-tune:
-  python src/isaac_so_arm101/scripts/vla/vla_lora_finetune.py \
+  uv run train_lora \
     --data_jsonl data/vla_train/dataset.jsonl \
     --image_root data/vla_train/images ...
 """

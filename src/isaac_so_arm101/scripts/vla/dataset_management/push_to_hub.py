@@ -1,9 +1,15 @@
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 import argparse
 
-def push_to_hf(hf_username, dataset_name):
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--user", type=str, required=True, help="Your Hugging Face username")
+    parser.add_argument("--name", type=str, default="isaac_so_arm101_vla", help="What to name the dataset on HF")
+    
+    args = parser.parse_args()
+    
     local_repo_id = "local/merged_vla_dataset"
-    hub_repo_id = f"{hf_username}/{dataset_name}"
+    hub_repo_id = f"{args.user}/{args.name}"
     
     print(f"Loading local dataset: {local_repo_id}...")
     ds = LeRobotDataset(local_repo_id)
@@ -21,9 +27,4 @@ def push_to_hf(hf_username, dataset_name):
     print(f"\n[SUCCESS] Dataset uploaded to: https://huggingface.co/datasets/{hub_repo_id}")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--user", type=str, required=True, help="Your Hugging Face username")
-    parser.add_argument("--name", type=str, default="isaac_so_arm101_vla", help="What to name the dataset on HF")
-    
-    args = parser.parse_args()
-    push_to_hf(args.user, args.name)
+    main()

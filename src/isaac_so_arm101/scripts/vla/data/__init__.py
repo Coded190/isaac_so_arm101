@@ -1,11 +1,11 @@
 # data/__init__.py
 
-from .loader import (
-    LeRobotVlaDataset,
-    JsonlVlaDataset,
-    PaddedCollatorForActionPrediction,
+from .dataset_utils import (
     DiscreteActionTokenizer,
-    build_openvla_prompt
+    JsonlVlaDataset,
+    LeRobotVlaDataset,
+    PaddedCollatorForActionPrediction,
+    build_openvla_prompt,
 )
 
 # Define the public API of the 'data' module

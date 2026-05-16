@@ -6,36 +6,41 @@ set -e
 
 # Set default Hugging Face settings (you can change these or pass them as arguments)
 HF_USER=${1:-"coded190"}
-DATASET_NAME=${2:-"isaac_so_arm101_vla"}
+DATASET_NAME=${2:-"isaac_so_arm101_vla_v2"}
+DATASET_ROOT="outputs/vla_palm_dataset_v2_run1"
+MERGED_REPO_ID="local/merged_vla_dataset"   # must match push_dataset.py:5 hardcoded value
+# LeRobot writes merged datasets into HuggingFace's local cache dir
+MERGED_CACHE="$HOME/.cache/huggingface/lerobot/$MERGED_REPO_ID"
 
 # Clean up old dataset folders before starting
-rm -rf outputs/vla_palm_dataset outputs/vla_palm_dataset_merged
+rm -rf "$DATASET_ROOT" "$MERGED_CACHE"
 
 echo "============================================================"
-echo "[STEP 1] Running Data Generation..."
+echo "[STEP 1] Running Data Generation -> $DATASET_ROOT"
 echo "============================================================"
-# Run the data generation script exactly as you normally would
-uv run vla_data_gen.py \
+# Multi-env generation with v2 kinematic improvements (4-DOF IK on gripper tip,
+# randomized base placement, slow-motion approach, etc.)
+# PhysX cosmetic warnings are dropped via 2>/dev/null.
+uv run generate_data \
     --task Isaac-PING-TI-VLA-v0 \
     --num_envs 10 \
     --enable_cameras \
-    --save_data
+    --save_data \
+    --dataset_root "$DATASET_ROOT" 2>/dev/null
 
 echo ""
 echo "============================================================"
-echo "[STEP 2] Running Dataset Merge..."
+echo "[STEP 2] Running Dataset Merge -> $MERGED_REPO_ID"
 echo "============================================================"
-# Run the merge script using uv to ensure it uses the same environment
-uv run merge_datasets.py \
-    --input_dir outputs/vla_palm_dataset \
-    --repo_id local/merged_vla_dataset
+uv run merge_datasets \
+    --input_dir "$DATASET_ROOT" \
+    --repo_id "$MERGED_REPO_ID"
 
 echo ""
 echo "============================================================"
 echo "[STEP 3] Pushing Dataset to Hugging Face..."
 echo "============================================================"
-# Run the push script with your credentials
-uv run push_dataset.py \
+uv run push_to_hub \
     --user "$HF_USER" \
     --name "$DATASET_NAME"
 

@@ -14,7 +14,8 @@ delta toward DOWN_QUAT so a VLA policy can learn the orientation command —
 the wrist override only shapes the sim execution, not the recorded action.
 
 Typical launch:
-    uv run vla_data_gen.py --task Isaac-PING-TI-VLA-v0 --num_envs 10 \\
+    uv run vla_data_gen_v2 \
+        --task Isaac-PING-TI-VLA-v0 --num_envs 10 \\
         --enable_cameras --save_data
 """
 

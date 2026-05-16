@@ -26,8 +26,26 @@ play = "isaac_so_arm101.scripts.rsl_rl.play:main"
 list_envs = "isaac_so_arm101.scripts.list_envs:main"
 zero_agent = "isaac_so_arm101.scripts.zero_agent:main"
 random_agent = "isaac_so_arm101.scripts.random_agent:main"
-vla_inference = "isaac_so_arm101.scripts.vla.vla_inference:main"
-vla_data_gen = "isaac_so_arm101.scripts.vla.vla_data_gen:main"
+
+# VLA training scripts
+train_lora = "isaac_so_arm101.scripts.vla.training.train_lora:main"
+train_full = "isaac_so_arm101.scripts.vla.training.train_full:main"
+
+# VLA inference script
+infer = "isaac_so_arm101.scripts.vla.inference.infer:main"
+
+# VLA data generation scripts
+record_dataset = "isaac_so_arm101.scripts.vla.data_generation.record_dataset:main"
+generate_data = "isaac_so_arm101.scripts.vla.data_generation.generate_data:main"
+
+# VLA dataset management scripts
+prepare_data = "isaac_so_arm101.scripts.vla.dataset_management.prepare_data:main"
+merge_datasets = "isaac_so_arm101.scripts.vla.dataset_management.merge_datasets:main"
+push_to_hub = "isaac_so_arm101.scripts.vla.dataset_management.push_to_hub:main"
+
+# Legacy VLA scripts (deprecated, use new names above)
+vla_inference = "isaac_so_arm101.scripts.vla.inference.infer:main"
+vla_data_gen_v2 = "isaac_so_arm101.scripts.vla.data_generation.generate_data:main"
 
 [tool.uv]
 index-strategy = "unsafe-best-match"

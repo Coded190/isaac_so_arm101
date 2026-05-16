@@ -47,14 +47,14 @@ uv run play --task Isaac-PING-TI-Reach-Play-v0
 
 ---
 
-## 🎥 Workflow 2: Data Generation & Recording
-Generate synthetic datasets using Isaac Sim cameras to train Vision-Language-Action (VLA) models.
+## 🎥 Workflow 2: Data Recording (Single Environment)
+Record a small JSONL dataset (images + instructions + normalized actions) from simulation.
 
-Record a JSONL dataset (images + instructions + normalized actions) using random or scripted policies. 
 > *Note: Recording requires Isaac Sim rendering. If using WSL2 without Vulkan support, run this on a native Linux machine.*
 
+**Record with random actions:**
 ```bash
-uv run vla_record_dataset \
+uv run record_dataset \
    --task Isaac-PING-TI-VLA-v0 \
    --num_envs 1 \
    --num_steps 2000 \
@@ -63,38 +63,122 @@ uv run vla_record_dataset \
    --out_dir data/vla_train \
    --headless
 ```
-*Tip: You can use `--append` to keep adding more samples to an existing `dataset.jsonl`.*
+
+This creates:
+- `data/vla_train/dataset.jsonl` (image paths + instructions + normalized actions)
+- `data/vla_train/images/frame_*.png` (image files)
+
+*Tip: Use `--append` to keep adding more samples to an existing `dataset.jsonl`.*
 
 ---
 
 ## 🧠 Workflow 3: OpenVLA LoRA Fine-Tuning
-Fine-tune a 7-Billion parameter Vision-Language-Action model (OpenVLA) on your custom recorded dataset or LeRobot Hugging Face datasets using Parameter-Efficient Fine-Tuning (PEFT/LoRA).
+Fine-tune a 7-Billion parameter Vision-Language-Action model (OpenVLA) on your custom dataset or LeRobot Hugging Face datasets using Parameter-Efficient Fine-Tuning (PEFT/LoRA).
 
-**1. Configure your run:**
-Edit the `configs/lora_config.json` file to set your dataset paths, batch sizes, and learning rates.
+### 3a. Generate Data at Scale (Multi-Environment)
 
-**2. Launch Distributed Training:**
-Our modularized training script automatically handles multi-GPU setups, WandB logging, and LoRA injection.
+Generate training data from multiple parallel environments, merge them, and push to Hugging Face Hub:
+
 ```bash
-uv run accelerate launch train.py --config configs/lora_config.json
+cd src/isaac_so_arm101/scripts/vla
+./run_data_generation_upload.sh <HF_USERNAME> <DATASET_NAME>
 ```
-*Outputs (Adapter weights and `action_norm_stats.json`) will be saved to the `outputs/openvla_lora` directory.*
+
+This orchestrates three steps:
+1. **Data Generation** (10 parallel environments): Collects images, instructions, and normalized actions
+2. **Dataset Merging**: Combines data from all environments into a single LeRobot dataset
+3. **Hugging Face Upload**: Pushes the merged dataset to your Hugging Face Hub account
+
+Example:
+```bash
+./run_data_generation_upload.sh coded190 my_vla_dataset_v1
+```
+
+For single-environment data collection without uploading:
+```bash
+uv run record_dataset \
+   --task Isaac-PING-TI-VLA-v0 \
+   --num_envs 1 \
+   --num_steps 2000 \
+   --instruction "reach the target" \
+   --policy random \
+   --out_dir data/vla_train \
+   --headless
+```
+
+### 3b. Prepare Data for Fine-Tuning
+
+Pull your merged dataset from Hugging Face Hub for local fine-tuning:
+
+```bash
+uv run prepare_data \
+    --repo_id <HF_USERNAME>/my_vla_dataset_v1
+```
+
+This prepares the LeRobot dataset in the proper format and normalizes actions for training.
+
+### 3c. Launch Fine-Tuning
+
+**Option 1: Using a Configuration File (Recommended for Multi-GPU)**
+```bash
+cd src/isaac_so_arm101/scripts/vla
+
+LEROBOT_VIDEO_BACKEND=pyav NCCL_SHM_DISABLE=1 NCCL_P2P_DISABLE=1 \
+accelerate launch --num_processes 2 training/train_lora.py \
+    --config configs/lora_config.json
+```
+
+**Option 2: Direct Command Line**
+```bash
+uv run train_lora \
+    --vla_path "openvla/openvla-7b" \
+    --lerobot_repo_ids "<HF_USERNAME>/my_vla_dataset_v1" \
+    --output_dir "outputs/openvla_lora_weights" \
+    --batch_size 4 \
+    --grad_accum_steps 4 \
+    --learning_rate 5e-4 \
+    --max_steps 5000
+```
+
+*Outputs (Adapter weights and `action_norm_stats.json`) will be saved to `outputs/openvla_lora_weights`.*
+
+### 3d. Full Fine-Tuning (Optional)
+
+For unrestricted fine-tuning of all model parameters (requires more memory):
+
+```bash
+accelerate launch --num_processes 2 \
+    src/isaac_so_arm101/scripts/vla/training/train_full.py \
+    --vla_path "openvla/openvla-7b" \
+    --lerobot_repo_ids "<HF_USERNAME>/my_vla_dataset_v1" \
+    --output_dir "outputs/openvla_full_weights" \
+    --batch_size 2 \
+    --max_steps 5000
+```
 
 ---
 
-## 🤖 Workflow 4: VLA Inference & Sim2Real
+## 🤖 Workflow 4: VLA Inference & Deployment
 Deploy your fine-tuned LoRA adapter back into Isaac Lab to drive the robot using the vision-language model.
 
-The script automatically registers your custom physical joint limits (`action_norm_stats.json`) and un-normalizes the neural network outputs into real-world robot commands.
+The script automatically loads your action normalization statistics (`action_norm_stats.json`) and un-normalizes the neural network outputs into real-world robot commands.
 
-**Run the Inference loop with your LoRA Adapter:**
+**Base Model Inference (No fine-tuning):**
 ```bash
-OPENVLA_ADAPTER_PATH="./outputs/openvla_lora" uv run vla_inference.py \
+uv run infer \
     --task Isaac-PING-TI-VLA-v0 \
     --num_envs 1 \
     --enable_cameras
 ```
-*(If `OPENVLA_ADAPTER_PATH` is omitted, the script will fall back to the base OpenVLA model).*
+
+**With Your Fine-Tuned LoRA Adapter:**
+```bash
+uv run infer \
+    --task Isaac-PING-TI-VLA-v0 \
+    --num_envs 1 \
+    --enable_cameras \
+    --lora_path outputs/openvla_lora_weights
+```
 
 ---
 

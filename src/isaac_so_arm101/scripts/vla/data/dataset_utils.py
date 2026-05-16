@@ -1,15 +1,31 @@
-# Handles turning images and text into tensors.
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 import json
-import torch
+import math
 import numpy as np
 from pathlib import Path
-from PIL import Image
-from torch.utils.data import Dataset
-from torch.nn.utils.rnn import pad_sequence
-from typing import Any, List, Dict, Optional, Union, Tuple, Sequence
-from dataclasses import dataclass
+
+try:
+    from PIL import Image
+    import torch
+    from torch.nn.utils.rnn import pad_sequence
+    from torch.utils.data import Dataset
+except Exception:  # pragma: no cover - allow import in workspaces without torch
+    class Dataset:  # type: ignore
+        pass
+
 
 IGNORE_INDEX = -100
+
+
+@dataclass
+class JsonlExample:
+    image: str
+    instruction: str
+    action: List[float]
+
 
 def _lower(s: str) -> str:
     return s.strip().lower()
@@ -72,13 +88,7 @@ class DiscreteActionTokenizer:
         token_ids = self.encode_to_token_ids(action)
         return self._tokenizer.decode(token_ids.tolist())
 
-@dataclass(frozen=True)
-class JsonlExample:
-    image: str
-    instruction: str
-    action: List[float]
-    
-    
+
 class JsonlVlaDataset(Dataset):
     def __init__(
         self,
@@ -225,7 +235,7 @@ class LeRobotVlaDataset(Dataset):
         tokenizer,
         image_transform,
         vla_path: Union[str, Path],
-        action_tokenizer: "DiscreteActionTokenizer",
+        action_tokenizer: DiscreteActionTokenizer,
         action_dim: int = 7,
         predict_stop_token: bool = True,
     ) -> None:
