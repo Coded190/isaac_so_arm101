@@ -129,6 +129,44 @@ except ImportError:
 import isaac_so_arm101.tasks
 from isaaclab_tasks.utils import parse_env_cfg
 
+from pxr import UsdPhysics
+def find_offending_joints(stage):
+    print("\n[DEBUG] --- SCANNING USD STAGE FOR STATIC JOINTS ---")
+    found_issues = False
+    
+    # Traverse every prim in the environment
+    for prim in stage.Traverse():
+        # Look for any type of Physics Joint
+        if prim.IsA(UsdPhysics.Joint):
+            joint = UsdPhysics.Joint(prim)
+            body0_targets = joint.GetBody0Rel().GetTargets()
+            body1_targets = joint.GetBody1Rel().GetTargets()
+            
+            # Helper to check if a specific target is static
+            def is_actor_static(paths):
+                if not paths: 
+                    return True # Empty target means it is anchored to the static World
+                actor_prim = stage.GetPrimAtPath(paths[0])
+                if not actor_prim: 
+                    return True
+                if not actor_prim.HasAPI(UsdPhysics.RigidBodyAPI):
+                    return True # No rigid body means it's a static collider
+                
+                rb_api = UsdPhysics.RigidBodyAPI(actor_prim)
+                kinematic = rb_api.GetKinematicEnabledAttr().Get()
+                return True if kinematic else False
+
+            # If BOTH bodies connected by the joint are static, PhysX will crash
+            if is_actor_static(body0_targets) and is_actor_static(body1_targets):
+                print(f"CRITICAL: Joint {prim.GetPath()} connects two STATIC bodies!")
+                print(f"   -> Body0: {body0_targets if body0_targets else 'WORLD'}")
+                print(f"   -> Body1: {body1_targets if body1_targets else 'WORLD'}")
+                found_issues = True
+                
+    if not found_issues:
+        print("[DEBUG] No static-to-static joints found. The issue might be shape-attachment related.")
+    print("[DEBUG] --------------------------------------------\n")
+
 # ─── Kinematic / FSM constants ────────────────────────────────────────────
 ACTION_CLAMP = 0.25      # recording-style slow motion (was 0.5; smoother per-step deltas)
 POSITION_GAIN = 0.35     # recording-style slow motion (was 0.75)
@@ -880,6 +918,8 @@ def main():
     step_counter = 0
     state_names = {0: "approach_wp", 1: "approach_hover", 2: "settle",
                    3: "spray", 4: "success_hold", 5: "fail_hold"}
+    
+    find_offending_joints(stage)
 
     while simulation_app.is_running():
         robot_data = env.unwrapped.scene["robot"].data
