@@ -307,25 +307,21 @@ def _leaf_world_positions(stage, palm_root_path):
 
 
 def set_leaf_prims_active(stage, palm_root_path, active=True):
-    """Activate or deactivate every leaf under palm_root_path.
-
-    When activating, iterate via GetAllChildren() so we also pick up
-    leaves previously SetActive(False)'d — plain GetChildren() filters
-    out inactive prims and would leave them dead forever, causing the
-    tree to get progressively balder across episodes.
-    """
+    """Activate or deactivate every leaf under palm_root_path using Visibility."""
     from pxr import UsdGeom
     palm = stage.GetPrimAtPath(palm_root_path)
     if not palm:
         return
-    if active:
-        for child in palm.GetAllChildren():
-            name = child.GetName()
-            if name.startswith("leaf_") and UsdGeom.Xformable(child):
-                child.SetActive(True)
-    else:
-        for prim in _iter_leaf_prims(stage, palm_root_path):
-            prim.SetActive(False)
+        
+    for child in palm.GetAllChildren():
+        name = child.GetName()
+        if name.startswith("leaf_") and UsdGeom.Xformable(child):
+            # Use Imageable to toggle visibility safely without breaking PhysX
+            imageable = UsdGeom.Imageable(child)
+            if active:
+                imageable.MakeVisible()
+            else:
+                imageable.MakeInvisible()
 
 
 def get_crown_centroid(stage, palm_root_path):
@@ -338,13 +334,17 @@ def get_crown_centroid(stage, palm_root_path):
 
 def remove_top_leaves(stage, palm_root_path, crown_z, keep_ratio,
                       z_threshold_offset=LEAF_CULL_Z_OFFSET):
+    from pxr import UsdGeom
     cull_z = crown_z + z_threshold_offset
     leaves = _leaf_world_positions(stage, palm_root_path)
+    
     top_leaves = [(prim, pos[2]) for prim, pos in leaves if pos[2] > cull_z]
     top_leaves.sort(key=lambda x: -x[1])
     n_remove = int(len(top_leaves) * (1.0 - keep_ratio))
+    
     for prim, _ in top_leaves[:n_remove]:
-        prim.SetActive(False)
+        # Safely hide the culled leaves without destroying their physics representations
+        UsdGeom.Imageable(prim).MakeInvisible()
 
 
 def spawn_target_marker(stage, position_world, marker_path, radius=0.04, color=(1.0, 0.0, 0.0)):
@@ -823,8 +823,8 @@ def main():
     import omni.usd
     stage = omni.usd.get_context().get_stage()
     palm_root_paths = [get_palm_root_path(env_id) for env_id in range(num_envs)]
-    # for palm_path in palm_root_paths:
-    #     disable_palm_physics(stage, palm_path)
+    for palm_path in palm_root_paths:
+        disable_palm_physics(stage, palm_path)
     episode_rng = np.random.default_rng(getattr(args_cli, "seed", None))
 
     randomize_robot_root_pose(
