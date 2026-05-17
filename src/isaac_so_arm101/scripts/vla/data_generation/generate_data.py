@@ -235,8 +235,8 @@ def print_joint_properties(joint_prim):
 from pxr import UsdLux
 import random
 
-def randomize_lighting(stage, hdri_folder_path):
-    """Finds the DomeLight in the scene and assigns a random HDRI."""
+def randomize_lighting(stage, hdri_folder_path, env_ids=None):
+    """Assign one random HDRI to every env-local DomeLight in the stage."""
     # Get a list of all HDR/EXR files in your folder
     valid_exts = (".hdr", ".exr")
     hdri_files = [f for f in os.listdir(hdri_folder_path) if f.endswith(valid_exts)]
@@ -246,16 +246,31 @@ def randomize_lighting(stage, hdri_folder_path):
 
     chosen_hdri = random.choice(hdri_files)
     full_path = os.path.join(hdri_folder_path, chosen_hdri)
+    intensity = random.uniform(500.0, 1500.0)
 
-    # Traverse the stage to find the DomeLight and swap the texture
-    for prim in stage.Traverse():
-        if prim.IsA(UsdLux.DomeLight):
-            light = UsdLux.DomeLight(prim)
-            # Apply the new HDRI texture
-            light.GetTextureFileAttr().Set(full_path)
-            # Optional: Randomize intensity slightly so shadows vary
-            light.GetIntensityAttr().Set(random.uniform(500.0, 1500.0))
-            break # Assuming one main dome light
+    if env_ids is None:
+        env_ids = []
+        envs_root = stage.GetPrimAtPath("/World/envs")
+        if envs_root:
+            for env_prim in envs_root.GetChildren():
+                name = env_prim.GetName()
+                if name.startswith("env_"):
+                    suffix = name.split("env_", 1)[1]
+                    if suffix.isdigit():
+                        env_ids.append(int(suffix))
+
+    updated = 0
+    for env_id in env_ids:
+        prim = stage.GetPrimAtPath(f"/World/envs/env_{env_id}/Scene/DomeLight")
+        if not prim or not prim.IsA(UsdLux.DomeLight):
+            continue
+        light = UsdLux.DomeLight(prim)
+        light.GetTextureFileAttr().Set(full_path)
+        light.GetIntensityAttr().Set(intensity)
+        updated += 1
+
+    if updated == 0:
+        print("[WARNING] No env-local DomeLight prims were found to update.")
 
 
 def disable_palm_physics(stage, palm_root_path):
@@ -880,7 +895,7 @@ def main():
     episode_rng = np.random.default_rng(getattr(args_cli, "seed", None))
     
     HDRI_FOLDER_PATH = "/home/cirplab/moore/isaac_data/palm_tree_models/blender/pretoria_gardens_4k"
-    randomize_lighting(stage, HDRI_FOLDER_PATH)
+    randomize_lighting(stage, HDRI_FOLDER_PATH, env_ids=range(num_envs))
 
     randomize_robot_root_pose(
         env=env, stage=stage, palm_root_paths=palm_root_paths,
@@ -1126,7 +1141,7 @@ def main():
                 print(f"[step {step_counter:5d}] global reset "
                       f"({', '.join(reasons)})", flush=True)
 
-            randomize_lighting(stage, HDRI_FOLDER_PATH)
+            randomize_lighting(stage, HDRI_FOLDER_PATH, env_ids=range(num_envs))
             randomize_robot_root_pose(
                 env=env, stage=stage, palm_root_paths=palm_root_paths,
                 episode_rng=episode_rng, env_ids=reset_env_ids,
