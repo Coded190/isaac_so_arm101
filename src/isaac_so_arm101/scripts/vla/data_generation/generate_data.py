@@ -86,7 +86,6 @@ parser.add_argument("--save_data", action="store_true", help="Enable saving data
 parser.add_argument("--top_leaf_cull_prob", type=float, default=0.5, help="Probability of culling the top leaves for a given episode.")
 parser.add_argument("--dataset_root", type=str, default="outputs/vla_palm_dataset", help="Root folder where per-env LeRobot datasets are stored.")
 AppLauncher.add_app_launcher_args(parser)
-sys.argv.append("--/persistent/omni/physx/persistentErrorMaxCount=1000000")
 args_cli = parser.parse_args()
 
 app_launcher = AppLauncher(args_cli)
