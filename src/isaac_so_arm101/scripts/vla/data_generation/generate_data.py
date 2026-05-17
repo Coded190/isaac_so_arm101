@@ -290,21 +290,31 @@ def disable_palm_physics(stage, palm_root_path):
         # Check by actual USD Type instead of relying on the string name
         if child.IsA(UsdPhysics.Joint): 
             
-            if not hasattr(disable_palm_physics, "has_printed"):
-                print_joint_properties(child)
-                disable_palm_physics.has_printed = True
+            # if not hasattr(disable_palm_physics, "has_printed"):
+            #     print_joint_properties(child)
+            #     disable_palm_physics.has_printed = True
 
             for prop in child.GetAuthoredProperties():
                 prop_name = prop.GetName().lower()
                 
+                # 1. Kill the spring forces so the leaf doesn't fight back
                 if "stiffness" in prop_name:
                     prop.Set(0.0)
+                    
+                # 2. Grease the hinge (leave a tiny amount of damping so it doesn't vibrate infinitely)
                 elif "damping" in prop_name:
                     prop.Set(0.01)
-                elif "upperlimit" in prop_name:
-                    prop.Set(180.0)
-                elif "lowerlimit" in prop_name:
-                    prop.Set(-180.0)
+                    
+                # 3. Unlock the ROTATIONAL limits to allow 180 degrees of free bending
+                elif "limit" in prop_name and "rot" in prop_name:
+                    if "high" in prop_name:
+                        prop.Set(180.0) 
+                    elif "low" in prop_name:
+                        prop.Set(-180.0)
+                        
+                # Note: We completely ignore "trans" (translational) limits. 
+                # We want those to stay locked (low > high) so the leaf 
+                # doesn't disconnect and fall off the trunk!
 
 
 def _iter_leaf_prims(stage, palm_root_path):
