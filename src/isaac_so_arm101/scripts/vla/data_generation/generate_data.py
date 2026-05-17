@@ -234,12 +234,14 @@ def print_joint_properties(joint_prim):
 
 def disable_palm_physics(stage, palm_root_path):
     """Updates palm tree leaves to be lightweight, and completely loosens their joints."""
-    from pxr import UsdPhysics
+    from pxr import Usd, UsdPhysics
+    
     palm = stage.GetPrimAtPath(palm_root_path)
     if not palm:
         return
 
-    for child in palm.GetAllChildren():
+    # Use Usd.PrimRange to recursively traverse ALL descendants in the tree
+    for child in Usd.PrimRange(palm):
         prim_name = child.GetName()
         
         # 1. MAKE LEAVES LIGHTWEIGHT AND DYNAMIC
@@ -251,7 +253,7 @@ def disable_palm_physics(stage, palm_root_path):
                 
             kin_attr = rb_api.GetKinematicEnabledAttr()
             if kin_attr:
-                kin_attr.Set(False) # Dynamic
+                kin_attr.Set(False) 
             else:
                 rb_api.CreateKinematicEnabledAttr(False)
 
@@ -284,28 +286,23 @@ def disable_palm_physics(stage, palm_root_path):
                 else:
                     rb_api.CreateKinematicEnabledAttr(True)
 
-        # 3. THE FIX: NEUTRALIZE ALL STIFFNESS, DAMPING, AND LIMITS ON EVERYTHING
-        if "Joint" in prim_name:
-            # First: Print the properties BEFORE we change them, so you can see the original culprits
+        # 3. THE FIX: RELIABLY FIND AND NEUTRALIZE JOINTS
+        # Check by actual USD Type instead of relying on the string name
+        if child.IsA(UsdPhysics.Joint): 
+            
             if not hasattr(disable_palm_physics, "has_printed"):
                 print_joint_properties(child)
                 disable_palm_physics.has_printed = True
 
-            # Next: Iterate through the joint's properties and overwrite the restrictive ones
             for prop in child.GetAuthoredProperties():
                 prop_name = prop.GetName().lower()
                 
-                # Remove spring-return force
                 if "stiffness" in prop_name:
                     prop.Set(0.0)
-                    
-                # Reduce friction/resistance so it moves freely
                 elif "damping" in prop_name:
                     prop.Set(0.01)
-                    
-                # Expand hard walls/limits so the arm can push the leaf far out of the way
                 elif "upperlimit" in prop_name:
-                    prop.Set(180.0) # Allow 180 degrees of bending
+                    prop.Set(180.0)
                 elif "lowerlimit" in prop_name:
                     prop.Set(-180.0)
 
