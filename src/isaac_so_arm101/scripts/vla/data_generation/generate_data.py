@@ -232,6 +232,32 @@ def print_joint_properties(joint_prim):
             print(f"     {name}: {val}")
     print("---------------------------------------------------\n")
 
+from pxr import UsdLux
+import random
+
+def randomize_lighting(stage, hdri_folder_path):
+    """Finds the DomeLight in the scene and assigns a random HDRI."""
+    # Get a list of all HDR/EXR files in your folder
+    valid_exts = (".hdr", ".exr")
+    hdri_files = [f for f in os.listdir(hdri_folder_path) if f.endswith(valid_exts)]
+    if not hdri_files:
+        print("[WARNING] No HDRIs found in the folder.")
+        return
+
+    chosen_hdri = random.choice(hdri_files)
+    full_path = os.path.join(hdri_folder_path, chosen_hdri)
+
+    # Traverse the stage to find the DomeLight and swap the texture
+    for prim in stage.Traverse():
+        if prim.IsA(UsdLux.DomeLight):
+            light = UsdLux.DomeLight(prim)
+            # Apply the new HDRI texture
+            light.GetTextureFileAttr().Set(full_path)
+            # Optional: Randomize intensity slightly so shadows vary
+            light.GetIntensityAttr().Set(random.uniform(500.0, 1500.0))
+            break # Assuming one main dome light
+
+
 def disable_palm_physics(stage, palm_root_path):
     """Updates palm tree leaves to be lightweight, and completely loosens their joints."""
     from pxr import Usd, UsdPhysics
@@ -852,6 +878,9 @@ def main():
     for palm_path in palm_root_paths:
         disable_palm_physics(stage, palm_path)
     episode_rng = np.random.default_rng(getattr(args_cli, "seed", None))
+    
+    HDRI_FOLDER_PATH = "/home/cirplab/moore/isaac_data/palm_tree_models/blender/pretoria_gardens_4k"
+    randomize_lighting(stage, HDRI_FOLDER_PATH)
 
     randomize_robot_root_pose(
         env=env, stage=stage, palm_root_paths=palm_root_paths,
@@ -941,6 +970,7 @@ def main():
 
     prev_states = [oracle.state for oracle in oracles]
     leaf_stuck_steps = [0] * num_envs
+    pending_reset_env_ids = set()
     step_counter = 0
     state_names = {0: "approach_wp", 1: "approach_hover", 2: "settle",
                    3: "spray", 4: "success_hold", 5: "fail_hold"}
@@ -1062,9 +1092,12 @@ def main():
                           f"{leaf_stuck_steps[env_id]} steps) → forcing reset",
                           flush=True)
 
-        reset_env_ids = sorted(set(done_env_ids) | set(stuck_env_ids))
+        pending_reset_env_ids.update(done_env_ids)
+        pending_reset_env_ids.update(stuck_env_ids)
 
-        if reset_env_ids:
+        if len(pending_reset_env_ids) == num_envs and pending_reset_env_ids:
+            reset_env_ids = list(range(num_envs))
+
             # Save/clear LeRobot episodes: keep successful runs, drop failed/stuck.
             if args_cli.save_data and datasets is not None:
                 for env_id in reset_env_ids:
@@ -1080,18 +1113,20 @@ def main():
                         else:
                             datasets[env_id].clear_episode_buffer()
                 print(
-                    f"[INFO]: Resetting {len(reset_env_ids)} env(s); "
+                    f"[INFO]: Resetting all {len(reset_env_ids)} envs together; "
                     f"total frames saved so far: {int(saved_frame_count.sum())}"
                 )
             if DEBUG_VERBOSE:
                 reasons = []
                 for env_id in reset_env_ids:
-                    if env_id in stuck_env_ids and env_id not in done_env_ids:
+                    if env_id in stuck_env_ids:
                         reasons.append(f"env {env_id}: leaf-stuck")
                     elif env_id in done_env_ids:
                         reasons.append(f"env {env_id}: done")
-                print(f"[step {step_counter:5d}] resetting "
+                print(f"[step {step_counter:5d}] global reset "
                       f"({', '.join(reasons)})", flush=True)
+
+            randomize_lighting(stage, HDRI_FOLDER_PATH)
             randomize_robot_root_pose(
                 env=env, stage=stage, palm_root_paths=palm_root_paths,
                 episode_rng=episode_rng, env_ids=reset_env_ids,
@@ -1115,6 +1150,7 @@ def main():
                 stage, current_hover_targets,
                 env_ids=reset_env_ids, marker_type="hover", color=(0.0, 0.0, 1.0),
             )
+            pending_reset_env_ids.clear()
 
     # Shutdown workaround for the known omni.syntheticdata crash on
     # Py_FinalizeEx (visible in the carb crashreporter trace as
