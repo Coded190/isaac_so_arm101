@@ -218,17 +218,17 @@ def get_palm_root_path(env_id):
 
 
 def disable_palm_physics(stage, palm_root_path):
-    """Updates palm tree leaves to be lightweight, dynamic obstacles so the arm can push them."""
+    """Updates palm tree leaves to be lightweight, and completely loosens their joints."""
     from pxr import UsdPhysics
     palm = stage.GetPrimAtPath(palm_root_path)
     if not palm:
         return
 
     for child in palm.GetAllChildren():
-        name = child.GetName()
+        prim_name = child.GetName()
         
-        if name.startswith("leaf_"):
-            # 1. Ensure it has a Rigid Body API and is DYNAMIC (not kinematic)
+        # 1. MAKE LEAVES LIGHTWEIGHT AND DYNAMIC
+        if prim_name.startswith("leaf_"):
             if child.HasAPI(UsdPhysics.RigidBodyAPI):
                 rb_api = UsdPhysics.RigidBodyAPI(child)
             else:
@@ -236,23 +236,21 @@ def disable_palm_physics(stage, palm_root_path):
                 
             kin_attr = rb_api.GetKinematicEnabledAttr()
             if kin_attr:
-                kin_attr.Set(False) # False = Dynamic (can be pushed)
+                kin_attr.Set(False) # Dynamic
             else:
                 rb_api.CreateKinematicEnabledAttr(False)
 
-            # 2. Add Mass API and set a very low mass (e.g., 0.05 kg)
             if child.HasAPI(UsdPhysics.MassAPI):
                 mass_api = UsdPhysics.MassAPI(child)
             else:
                 mass_api = UsdPhysics.MassAPI.Apply(child)
-                
+            
             mass_attr = mass_api.GetMassAttr()
             if mass_attr:
                 mass_attr.Set(0.05)
             else:
                 mass_api.CreateMassAttr(0.05)
                 
-            # 3. Ensure collisions are ENABLED so the arm can interact with them
             if child.HasAPI(UsdPhysics.CollisionAPI):
                 col_api = UsdPhysics.CollisionAPI(child)
                 col_attr = col_api.GetCollisionEnabledAttr()
@@ -261,8 +259,8 @@ def disable_palm_physics(stage, palm_root_path):
                 else:
                     col_api.CreateCollisionEnabledAttr(True)
 
-        elif name.startswith("Trunk"):
-            # Keep the trunk static/kinematic so the tree stands still
+        # 2. KEEP THE TRUNK IMMOVABLE
+        elif prim_name.startswith("Trunk"):
             if child.HasAPI(UsdPhysics.RigidBodyAPI):
                 rb_api = UsdPhysics.RigidBodyAPI(child)
                 kin_attr = rb_api.GetKinematicEnabledAttr()
@@ -270,6 +268,25 @@ def disable_palm_physics(stage, palm_root_path):
                     kin_attr.Set(True)
                 else:
                     rb_api.CreateKinematicEnabledAttr(True)
+
+        # 3. THE FIX: NEUTRALIZE ALL STIFFNESS, DAMPING, AND LIMITS ON EVERYTHING
+        # This will iterate through every authored property on the leaves AND the joints
+        for prop in child.GetAuthoredProperties():
+            prop_name = prop.GetName().lower()
+            
+            # Remove spring-return force
+            if "stiffness" in prop_name:
+                prop.Set(0.0)
+                
+            # Reduce friction/resistance so it moves freely (but leave a tiny bit so it doesn't vibrate infinitely)
+            elif "damping" in prop_name:
+                prop.Set(0.01)
+                
+            # Expand hard walls/limits so the arm can push the leaf far out of the way
+            elif "upperlimit" in prop_name:
+                prop.Set(180.0) # Allow 180 degrees of bending
+            elif "lowerlimit" in prop_name:
+                prop.Set(-180.0)
 
 
 def _iter_leaf_prims(stage, palm_root_path):
