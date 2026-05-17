@@ -85,10 +85,15 @@ parser.add_argument("--task", type=str, default="None", help="Name of the task."
 parser.add_argument("--save_data", action="store_true", help="Enable saving data with LeRobotDataset. If not set, data is not saved.")
 parser.add_argument("--top_leaf_cull_prob", type=float, default=0.5, help="Probability of culling the top leaves for a given episode.")
 parser.add_argument("--dataset_root", type=str, default="outputs/vla_palm_dataset", help="Root folder where per-env LeRobot datasets are stored.")
-AppLauncher.add_app_launcher_args(parser)
-args_cli = parser.parse_args()
 
-app_launcher = AppLauncher(args_cli)
+AppLauncher.add_app_launcher_args(parser)
+args_cli, _ = parser.parse_known_args()
+
+app_launcher = AppLauncher(
+        args_cli, 
+        extra_args=["--/persistent/omni/physx/persistentErrorMaxCount=10000000", 
+                    "--/persistent/omni/physx/rejectUnsupportedActors=false"]
+    )
 simulation_app = app_launcher.app
 
 import carb
@@ -954,7 +959,9 @@ def main():
 
         action_tensor = torch.tensor(action_batch, dtype=torch.float32, device=sim_device)
 
+        print(f"[DEBUG] Executing env.step() for Step {step_counter}...")
         _, _, terminated, truncated, _ = env.step(action_tensor)
+        print(f"[DEBUG] Finished env.step() for Step {step_counter} successfully!")
 
         # No joint-space override. 4-DOF IK + position-only commands → arm
         # converges cleanly to hover without orientation drift or clamp fights.
