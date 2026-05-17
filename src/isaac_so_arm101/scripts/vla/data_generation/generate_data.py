@@ -87,13 +87,15 @@ parser.add_argument("--top_leaf_cull_prob", type=float, default=0.5, help="Proba
 parser.add_argument("--dataset_root", type=str, default="outputs/vla_palm_dataset", help="Root folder where per-env LeRobot datasets are stored.")
 
 AppLauncher.add_app_launcher_args(parser)
+# 1. Parse standard arguments normally
 args_cli, _ = parser.parse_known_args()
 
-app_launcher = AppLauncher(
-        args_cli, 
-        extra_args=["--/persistent/omni/physx/persistentErrorMaxCount=10000000", 
-                    "--/persistent/omni/physx/rejectUnsupportedActors=false"]
-    )
+# 2. INJECT the PhysX limits directly into the system arguments BEFORE boot
+sys.argv.append("--/persistent/omni/physx/persistentErrorMaxCount=10000000")
+sys.argv.append("--/persistent/omni/physx/rejectUnsupportedActors=false")
+
+# 3. Boot the application
+app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
 import carb
@@ -102,10 +104,10 @@ import carb
 # out the viewport. Console noise is filtered by the Python stderr
 # wrapper at the top of this file plus 2>/dev/null in the launch command.
 carb.settings.get_settings().set_string("/log/level", "error")
-# PhysX error/warning budget: default ~50 → kills sim with 10+ envs (each
-# palm has ~50 leaf joints throwing PxJoint::setActors warnings). Raise it.
-carb.settings.get_settings().set_int("/persistent/omni/physx/persistentErrorMaxCount", 1000000)
-carb.settings.get_settings().set_bool("/persistent/omni/physx/rejectUnsupportedActors", False)
+
+# (Note: The persistentErrorMaxCount and rejectUnsupportedActors have been 
+# removed from here, as they are now handled by sys.argv above)
+
 carb.settings.get_settings().set_int("/physics/numThreads", 0)  # default
 # Suppress the cosmetic palm-joint errors entirely from the PhysX channel:
 carb.settings.get_settings().set_string("/log/channels/omni.physx.plugin", "fatal")
