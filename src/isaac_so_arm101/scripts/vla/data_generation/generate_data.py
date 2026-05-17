@@ -785,8 +785,8 @@ def main():
     import omni.usd
     stage = omni.usd.get_context().get_stage()
     palm_root_paths = [get_palm_root_path(env_id) for env_id in range(num_envs)]
-    for palm_path in palm_root_paths:
-        disable_palm_physics(stage, palm_path)
+    # for palm_path in palm_root_paths:
+    #     disable_palm_physics(stage, palm_path)
     episode_rng = np.random.default_rng(getattr(args_cli, "seed", None))
 
     randomize_robot_root_pose(
