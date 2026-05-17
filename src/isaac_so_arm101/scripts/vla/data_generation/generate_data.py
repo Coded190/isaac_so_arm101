@@ -255,31 +255,33 @@ def get_palm_root_path(env_id):
 
 
 def disable_palm_physics(stage, palm_root_path):
-    """Disable PhysX colliders and rigid-body simulation on every prim in
-    the palm subtree. Leaves stay visible but become inert — the robot
-    arm passes through them without disturbance, which is what we want
-    for clean recording captures.
-    """
-    try:
-        from pxr import Usd
-    except Exception:
-        return
+    """Safely disables physics on the palm tree trunk and leaves without breaking PhysX clones."""
+    from pxr import UsdPhysics
     palm = stage.GetPrimAtPath(palm_root_path)
     if not palm:
         return
-    for prim in Usd.PrimRange(palm):
-        col_attr = prim.GetAttribute("physics:collisionEnabled")
-        if col_attr:
-            col_attr.Set(False)
-        rb_attr = prim.GetAttribute("physics:rigidBodyEnabled")
-        if rb_attr:
-            rb_attr.Set(False)
-        # Also turn off the joint prims that linked these leaves to
-        # the trunk — without live rigid bodies on each end, PhysX
-        # otherwise fills the log with "cannot create a joint between
-        # static bodies" errors. Cosmetic; behavior is unchanged.
-        if "Joint" in prim.GetName():
-            prim.SetActive(False)
+
+    for child in palm.GetAllChildren():
+        name = child.GetName()
+        if name.startswith("leaf_"):
+            # Turn off collisions safely instead of destroying the API
+            if child.HasAPI(UsdPhysics.CollisionAPI):
+                collision_api = UsdPhysics.CollisionAPI(child)
+                # If the attribute doesn't exist, create it, otherwise set it
+                attr = collision_api.GetCollisionEnabledAttr()
+                if attr:
+                    attr.Set(False)
+                else:
+                    collision_api.CreateCollisionEnabledAttr(False)
+                    
+        elif name.startswith("Trunk"):
+            if child.HasAPI(UsdPhysics.CollisionAPI):
+                collision_api = UsdPhysics.CollisionAPI(child)
+                attr = collision_api.GetCollisionEnabledAttr()
+                if attr:
+                    attr.Set(False)
+                else:
+                    collision_api.CreateCollisionEnabledAttr(False)
 
 
 def _iter_leaf_prims(stage, palm_root_path):
