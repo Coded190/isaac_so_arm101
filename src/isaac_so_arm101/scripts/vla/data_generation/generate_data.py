@@ -308,9 +308,9 @@ def disable_palm_physics(stage, palm_root_path):
                 # 3. Unlock the ROTATIONAL limits to allow 180 degrees of free bending
                 elif "limit" in prop_name and "rot" in prop_name:
                     if "high" in prop_name:
-                        prop.Set(180.0) 
+                        prop.Set(179.0) 
                     elif "low" in prop_name:
-                        prop.Set(-180.0)
+                        prop.Set(-179.0)
                         
                 # Note: We completely ignore "trans" (translational) limits. 
                 # We want those to stay locked (low > high) so the leaf 
