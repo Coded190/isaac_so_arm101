@@ -87,9 +87,10 @@ parser.add_argument("--top_leaf_cull_prob", type=float, default=0.5, help="Proba
 parser.add_argument("--dataset_root", type=str, default="outputs/vla_palm_dataset", help="Root folder where per-env LeRobot datasets are stored.")
 AppLauncher.add_app_launcher_args(parser)
 sys.argv.append("--/persistent/omni/physx/persistentErrorMaxCount=1000000")
-args_cli, _ = parser.parse_known_args()
+args_cli = parser.parse_args()
 
 app_launcher = AppLauncher(args_cli)
+simulation_app = app_launcher.app
 
 import carb
 # Just the global level. Per-channel hammering was triggering
@@ -100,11 +101,11 @@ carb.settings.get_settings().set_string("/log/level", "error")
 # PhysX error/warning budget: default ~50 → kills sim with 10+ envs (each
 # palm has ~50 leaf joints throwing PxJoint::setActors warnings). Raise it.
 carb.settings.get_settings().set_int("/persistent/omni/physx/persistentErrorMaxCount", 1000000)
+carb.settings.get_settings().set_bool("/persistent/omni/physx/rejectUnsupportedActors", False)
 carb.settings.get_settings().set_int("/physics/numThreads", 0)  # default
 # Suppress the cosmetic palm-joint errors entirely from the PhysX channel:
 carb.settings.get_settings().set_string("/log/channels/omni.physx.plugin", "fatal")
 carb.settings.get_settings().set_string("/log/channels/omni.kit.notification_manager.manager", "fatal")
-simulation_app = app_launcher.app
 
 import cv2
 import torch
