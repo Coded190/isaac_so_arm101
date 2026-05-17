@@ -304,18 +304,9 @@ def disable_palm_physics(stage, palm_root_path):
                 # 2. Grease the hinge (leave a tiny amount of damping so it doesn't vibrate infinitely)
                 elif "damping" in prop_name:
                     prop.Set(0.01)
-                    
-                # 3. Unlock the ROTATIONAL limits to allow 180 degrees of free bending
-                elif "limit" in prop_name and "rot" in prop_name:
-                    if "high" in prop_name:
-                        prop.Set(90.0) 
-                    elif "low" in prop_name:
-                        prop.Set(-90.0)
-                        
-                # Note: We completely ignore "trans" (translational) limits. 
-                # We want those to stay locked (low > high) so the leaf 
-                # doesn't disconnect and fall off the trunk!
-
+                
+                # We completely leave the limits alone! 
+                # 45 degrees of limp bending is more than enough for the arm to pass.
 
 def _iter_leaf_prims(stage, palm_root_path):
     from pxr import UsdGeom
