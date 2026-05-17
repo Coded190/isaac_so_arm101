@@ -299,11 +299,11 @@ def disable_palm_physics(stage, palm_root_path):
                 
                 # 1. Kill the spring forces so the leaf doesn't fight back
                 if "stiffness" in prop_name:
-                    prop.Set(0.0)
+                    prop.Set(0.5)
                     
                 # 2. Grease the hinge (leave a tiny amount of damping so it doesn't vibrate infinitely)
                 elif "damping" in prop_name:
-                    prop.Set(0.01)
+                    prop.Set(0.1)
                 
                 # We completely leave the limits alone! 
                 # 45 degrees of limp bending is more than enough for the arm to pass.
