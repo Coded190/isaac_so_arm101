@@ -292,7 +292,12 @@ def _dump_dome_light_state(light, header):
         print(f"[dome-light]   resolved_paths=<error {exc}>", flush=True)
 
 def randomize_lighting(stage, hdri_folder_path, env_ids=None):
-    """Assign one random HDRI to a SINGLE global DomeLight and mute all cloned env lights."""
+    """Assign a random HDRI to env_0's DomeLight and mute all other cloned env lights.
+    
+    This acts as a clean global light because env_0's DomeLight is already tracked by the
+    renderer, avoids creating runtime root prims that Hydra might ignore, and safely 
+    prevents 100x overlapping brightness amplification.
+    """
     # 1. Pick a random HDRI
     valid_exts = (".hdr", ".exr")
     hdri_files = [f for f in os.listdir(hdri_folder_path) if f.endswith(valid_exts)]
@@ -303,56 +308,47 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
     chosen_hdri = random.choice(hdri_files)
     full_path = os.path.join(hdri_folder_path, chosen_hdri)
     
-    # Standard HDRI intensity (since there will only be ONE light now)
-    intensity = random.uniform(2000.0, 3000.0)
+    # Standard high intensity for a single active light in this setup
+    intensity = random.uniform(500.0, 1500.0)
 
     if DEBUG_VERBOSE:
         print(f"[randomize_lighting] chosen_hdri={chosen_hdri}", flush=True)
 
-    # 2. MUTE ALL CLONED DOME LIGHTS
-    # We turn off the lights inside the 100 individual environments so they don't multiply
+    # 2. Loop through all cloned environments
     envs_root = stage.GetPrimAtPath("/World/envs")
     if envs_root:
         for env_prim in envs_root.GetChildren():
-            # Adjust this path if your cloned light is named differently
+            env_name = env_prim.GetName()  # e.g., "env_0", "env_1", etc.
             local_light_path = f"{env_prim.GetPath()}/Scene/DomeLight"
             local_prim = stage.GetPrimAtPath(local_light_path)
             
             if local_prim and local_prim.IsA(UsdLux.DomeLight):
-                # Set intensity to 0 to completely turn it off
-                UsdLux.DomeLight(local_prim).GetIntensityAttr().Set(0.0)
-
-    # 3. CREATE OR UPDATE A SINGLE GLOBAL DOME LIGHT
-    # We place this at the root of the world so it applies to all 100 envs evenly
-    global_light_path = "/World/GlobalDomeLight"
-    global_light_prim = stage.GetPrimAtPath(global_light_path)
-    
-    if not global_light_prim:
-        # Create it if it doesn't exist yet (first episode)
-        global_light = UsdLux.DomeLight.Define(stage, global_light_path)
-    else:
-        # Just grab the existing one
-        global_light = UsdLux.DomeLight(global_light_prim)
-
-    # 4. APPLY THE HDRI PROPERTIES TO THE GLOBAL LIGHT
-    global_light.GetTextureFileAttr().Set(full_path)
-    global_light.GetIntensityAttr().Set(intensity)
-    
-    # Explicitly set the format to latlong to prevent black backgrounds
-    format_attr = global_light.GetTextureFormatAttr()
-    if format_attr:
-        format_attr.Set("latlong")
-    else:
-        global_light.CreateTextureFormatAttr("latlong")
-        
-    exposure_attr = global_light.GetExposureAttr()
-    if exposure_attr:
-        exposure_attr.Set(0.0)
-    else:
-        global_light.CreateExposureAttr(0.0)
+                light = UsdLux.DomeLight(local_prim)
+                
+                if env_name == "env_0":
+                    # --- CONFIGURING ENV_0 AS THE SOLE ACTIVE LIGHT ---
+                    light.GetTextureFileAttr().Set(full_path)
+                    light.GetIntensityAttr().Set(intensity)
+                    
+                    # Set format to latlong to prevent viewport black background issues
+                    format_attr = light.GetTextureFormatAttr()
+                    if format_attr:
+                        format_attr.Set("latlong")
+                    else:
+                        light.CreateTextureFormatAttr("latlong")
+                        
+                    exposure_attr = light.GetExposureAttr()
+                    if exposure_attr:
+                        exposure_attr.Set(0.0)
+                    else:
+                        light.CreateExposureAttr(0.0)
+                else:
+                    # --- MUTING ALL OTHER ENVIRONMENT SUNS ---
+                    # Set intensity to 0 to completely turn it off so they don't multiply
+                    light.GetIntensityAttr().Set(0.0)
 
     if DEBUG_VERBOSE:
-        print(f"[dome-light] Global lighting updated to {chosen_hdri} at intensity {intensity}")
+        print(f"[dome-light] Plan B Active: env_0 light set to {chosen_hdri} (intensity={intensity}). All other env lights muted.")
 
 
 def disable_palm_physics(stage, palm_root_path):
