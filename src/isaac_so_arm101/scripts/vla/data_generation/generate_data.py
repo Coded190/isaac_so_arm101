@@ -302,7 +302,9 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
 
     chosen_hdri = random.choice(hdri_files)
     full_path = os.path.join(hdri_folder_path, chosen_hdri)
-    intensity = random.uniform(400.0, 800.0)
+    
+    # This is the master intensity that will only be applied to env_0
+    target_intensity = random.uniform(400.0, 800.0)
     
     if DEBUG_VERBOSE:
         print(f"[randomize_lighting] chosen_hdri={chosen_hdri}", flush=True)
@@ -329,9 +331,25 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
         light = UsdLux.DomeLight(prim)
         if DEBUG_VERBOSE:
             _dump_dome_light_state(light, f"before env_{env_id}")
+            
         # USD automatically wraps paths in @...@ so pass the raw path
         light.GetTextureFileAttr().Set(full_path)
-        light.GetIntensityAttr().Set(intensity)
+        
+        # --- THE FIX: KEEP ENV 0 BRIGHT, TURN OTHERS TO 1.0 ---
+        if env_id == 0:
+            light.GetIntensityAttr().Set(target_intensity)
+        else:
+            # 1.0 is dim enough to not ruin the exposure, but high enough 
+            # to keep the HDRI visible in the local cameras!
+            light.GetIntensityAttr().Set(1.0)
+        
+        # (Optional but highly recommended) Force latlong format to prevent viewport blackouts
+        format_attr = light.GetTextureFormatAttr()
+        if format_attr:
+            format_attr.Set("latlong")
+        else:
+            light.CreateTextureFormatAttr("latlong")
+            
         if DEBUG_VERBOSE:
             print(f"[dome-light]   filesystem_path={full_path}", flush=True)
             _dump_dome_light_state(light, f"after env_{env_id} -> {chosen_hdri}")
