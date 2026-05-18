@@ -329,9 +329,8 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
         light = UsdLux.DomeLight(prim)
         if DEBUG_VERBOSE:
             _dump_dome_light_state(light, f"before env_{env_id}")
-        # Wrap path in USD syntax
-        usd_path = f"@{full_path}@"
-        light.GetTextureFileAttr().Set(usd_path)
+        # USD automatically wraps paths in @...@ so pass the raw path
+        light.GetTextureFileAttr().Set(full_path)
         light.GetIntensityAttr().Set(intensity)
         if DEBUG_VERBOSE:
             print(f"[dome-light]   filesystem_path={full_path}", flush=True)
