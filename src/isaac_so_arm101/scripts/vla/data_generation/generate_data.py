@@ -232,7 +232,7 @@ def print_joint_properties(joint_prim):
             print(f"     {name}: {val}")
     print("---------------------------------------------------\n")
 
-from pxr import UsdLux
+from pxr import UsdLux, Sdf, Gf
 import random
 
 
@@ -296,7 +296,8 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
     
     Tuning approach: Keeps the background image rich, keeps specular reflections
     muted to prevent glare, but boosts diffuse ambient light so shadows on 3D models 
-    are properly filled and visible.
+    are properly filled and visible. Includes a shadowless ambient fill floor to 
+    guarantee visibility under dark backgrounds.
     """
     # Get a list of all HDR/EXR files in your folder
     valid_exts = (".hdr", ".exr")
@@ -337,14 +338,14 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
         return
 
     # 2. Calculate base fraction per environment
-    fractional_multiplier = 1.0 / len(valid_env_lights)
+    num_envs = len(valid_env_lights)
+    fractional_multiplier = 1.0 / num_envs
 
     # --- TUNING KNOBS FOR THE PALM TREE ---
-    # Keep specular at 1x fraction to completely eliminate artificial glare/shininess
+    # Keep specular at 2x fraction to eliminate artificial glare/shininess
     specular_value = fractional_multiplier * 2.0
     
     # Boost the diffuse factor to fill in the deep shadows under the palm crown.
-    # Try 3.0 or 4.0. Higher numbers will bring out more details in the dark leaves!
     diffuse_boost = 10.0 
     diffuse_value = fractional_multiplier * diffuse_boost
 
@@ -386,6 +387,28 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
             exposure_attr.Set(0.0)
         else:
             light.CreateExposureAttr(0.0)
+
+        # --- THE AMBIENT SAFETY NET FLOOR ---
+        # Spawns or references a local DistantLight pointing straight down.
+        # Forcing its shadows to FALSE turns it into a pure ambient fill layer
+        # so objects never fall below a controlled brightness baseline.
+        ambient_path = f"/World/envs/env_{env_id}/Scene/AmbientFillLight"
+        ambient_prim = stage.GetPrimAtPath(ambient_path)
+        if not ambient_prim:
+            ambient_light = UsdLux.DistantLight.Define(stage, ambient_path)
+        else:
+            ambient_light = UsdLux.DistantLight(ambient_prim)
+            
+        # Distribute the baseline brightness across envs to avoid compounding exposure.
+        # Note: You can tweak 500.0 higher or lower to adjust the absolute minimum shadow brightness!
+        ambient_light.GetIntensityAttr().Set(500.0 / num_envs)
+        ambient_light.GetColorAttr().Set(Gf.Vec3f(1.0, 1.0, 1.0))
+        
+        # Explicitly turn off shadows for this baseline fill light
+        shadow_attr = ambient_light.GetPrim().GetAttribute("inputs:shadow:enable")
+        if not shadow_attr:
+            shadow_attr = ambient_light.GetPrim().CreateAttribute("inputs:shadow:enable", Sdf.ValueTypeNames.Bool)
+        shadow_attr.Set(False)
 
 
 def disable_palm_physics(stage, palm_root_path):
