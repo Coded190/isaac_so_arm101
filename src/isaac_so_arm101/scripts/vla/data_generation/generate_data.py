@@ -294,9 +294,9 @@ def _dump_dome_light_state(light, header):
 def randomize_lighting(stage, hdri_folder_path, env_ids=None):
     """Assign one random HDRI to every env-local DomeLight in the stage.
     
-    Decoupled approach: Keeps the base intensity high so the background image 
-    is bright, but divides surface diffuse/specular multipliers so the 100 
-    overlapping lights do not over-expose or create harsh glare on the 3D models.
+    Tuning approach: Keeps the background image rich, keeps specular reflections
+    muted to prevent glare, but boosts diffuse ambient light so shadows on 3D models 
+    are properly filled and visible.
     """
     # Get a list of all HDR/EXR files in your folder
     valid_exts = (".hdr", ".exr")
@@ -308,14 +308,11 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
     chosen_hdri = random.choice(hdri_files)
     full_path = os.path.join(hdri_folder_path, chosen_hdri)
     
-    # 1. Target intensity for a rich, vibrant background sky texture
+    # 1. Base intensity for a rich, vibrant background sky texture
     target_intensity = random.uniform(600.0, 1200.0)
     
     if DEBUG_VERBOSE:
         print(f"[randomize_lighting] chosen_hdri={chosen_hdri}", flush=True)
-        print(f"[randomize_lighting] hdri_folder_path={hdri_folder_path}", flush=True)
-        print(f"[randomize_lighting] full_path={full_path}", flush=True)
-        print(f"[randomize_lighting] full_path_exists={os.path.exists(full_path)}", flush=True)
 
     if env_ids is None:
         env_ids = []
@@ -339,39 +336,42 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
         print("[WARNING] No env-local DomeLight prims were found to update.")
         return
 
-    # 2. Calculate the fraction to prevent surface over-exposure
+    # 2. Calculate base fraction per environment
     fractional_multiplier = 1.0 / len(valid_env_lights)
 
+    # --- TUNING KNOBS FOR THE PALM TREE ---
+    # Keep specular at 1x fraction to completely eliminate artificial glare/shininess
+    specular_value = fractional_multiplier * 1.0
+    
+    # Boost the diffuse factor to fill in the deep shadows under the palm crown.
+    # Try 3.0 or 4.0. Higher numbers will bring out more details in the dark leaves!
+    diffuse_boost = 3.5 
+    diffuse_value = fractional_multiplier * diffuse_boost
+
     if DEBUG_VERBOSE:
-        print(f"[dome-light] Setting background intensity to {target_intensity} "
-              f"and surface mesh multiplier to {fractional_multiplier:.4f}", flush=True)
+        print(f"[dome-light] Intensity: {target_intensity} | Diffuse Val: {diffuse_value:.4f} | Specular Val: {specular_value:.4f}", flush=True)
 
     for env_id, prim in valid_env_lights:
         light = UsdLux.DomeLight(prim)
-        if DEBUG_VERBOSE:
-            _dump_dome_light_state(light, f"before env_{env_id}")
-            
+        
         # Pass the HDRI texture path
         light.GetTextureFileAttr().Set(full_path)
         
         # Keep intensity high so the background texture is fully visible and rich
         light.GetIntensityAttr().Set(target_intensity)
         
-        # --- THE FIX: Scale down how much this light interacts with 3D surfaces ---
+        # --- APPLY THE TUNED VALUES ---
         diffuse_attr = light.GetDiffuseAttr()
         if diffuse_attr:
-            diffuse_attr.Set(fractional_multiplier)
+            diffuse_attr.Set(diffuse_value)
         else:
-            light.CreateDiffuseAttr(fractional_multiplier)
+            light.CreateDiffuseAttr(diffuse_value)
             
-        # Scale down specular interaction to get rid of that harsh artificial shininess
         specular_attr = light.GetSpecularAttr()
         if specular_attr:
-            # Tip: If your models are still a bit too shiny, you can multiply 
-            # this by 0.5 to soften highlights even further!
-            specular_attr.Set(fractional_multiplier)
+            specular_attr.Set(specular_value)
         else:
-            light.CreateSpecularAttr(fractional_multiplier)
+            light.CreateSpecularAttr(specular_value)
         
         # Force latlong format to prevent viewport blackouts
         format_attr = light.GetTextureFormatAttr()
@@ -386,10 +386,6 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
             exposure_attr.Set(0.0)
         else:
             light.CreateExposureAttr(0.0)
-
-        if DEBUG_VERBOSE:
-            print(f"[dome-light]   filesystem_path={full_path}", flush=True)
-            _dump_dome_light_state(light, f"after env_{env_id} -> {chosen_hdri}")
 
 
 def disable_palm_physics(stage, palm_root_path):
