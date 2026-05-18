@@ -235,6 +235,44 @@ def print_joint_properties(joint_prim):
 from pxr import UsdLux
 import random
 
+
+def _dump_dome_light_state(light, header):
+    """Print a compact dump of DomeLight attrs relevant to HDRI rendering."""
+    path = light.GetPrim().GetPath()
+    print(f"[dome-light] {header} {path}", flush=True)
+    try:
+        authored_props = list(light.GetPrim().GetAuthoredProperties())
+        print(f"[dome-light]   authored_properties={len(authored_props)}", flush=True)
+        for prop in authored_props:
+            prop_name = prop.GetName()
+            try:
+                prop_value = prop.Get()
+            except Exception as exc:
+                prop_value = f"<error {exc}>"
+            print(f"[dome-light]     {prop_name}={prop_value}", flush=True)
+    except Exception as exc:
+        print(f"[dome-light]   authored_properties=<error {exc}>", flush=True)
+    try:
+        print(f"[dome-light]   textureFile={light.GetTextureFileAttr().Get()}", flush=True)
+    except Exception as exc:
+        print(f"[dome-light]   textureFile=<error {exc}>", flush=True)
+    try:
+        print(f"[dome-light]   intensity={light.GetIntensityAttr().Get()}", flush=True)
+    except Exception as exc:
+        print(f"[dome-light]   intensity=<error {exc}>", flush=True)
+    try:
+        exposure_attr = light.GetExposureAttr()
+        if exposure_attr:
+            print(f"[dome-light]   exposure={exposure_attr.Get()}", flush=True)
+    except Exception as exc:
+        print(f"[dome-light]   exposure=<error {exc}>", flush=True)
+    try:
+        texture_format_attr = light.GetTextureFormatAttr()
+        if texture_format_attr:
+            print(f"[dome-light]   textureFormat={texture_format_attr.Get()}", flush=True)
+    except Exception as exc:
+        print(f"[dome-light]   textureFormat=<error {exc}>", flush=True)
+
 def randomize_lighting(stage, hdri_folder_path, env_ids=None):
     """Assign one random HDRI to every env-local DomeLight in the stage."""
     # Get a list of all HDR/EXR files in your folder
@@ -246,7 +284,7 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
 
     chosen_hdri = random.choice(hdri_files)
     full_path = os.path.join(hdri_folder_path, chosen_hdri)
-    intensity = random.uniform(0.8, 1.3)
+    intensity = random.uniform(1.0, 2.0)
 
     if env_ids is None:
         env_ids = []
@@ -265,22 +303,12 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
         if not prim or not prim.IsA(UsdLux.DomeLight):
             continue
         light = UsdLux.DomeLight(prim)
+        if DEBUG_VERBOSE:
+            _dump_dome_light_state(light, f"before env_{env_id}")
         light.GetTextureFileAttr().Set(full_path)
-        try:
-            texture_format_attr = light.GetTextureFormatAttr()
-            if texture_format_attr:
-                texture_format_attr.Set("latlong")
-            elif hasattr(light, "CreateTextureFormatAttr"):
-                light.CreateTextureFormatAttr("latlong")
-        except Exception:
-            pass
-        try:
-            exposure_attr = light.GetExposureAttr()
-            if exposure_attr:
-                exposure_attr.Set(0.0)
-        except Exception:
-            pass
         light.GetIntensityAttr().Set(intensity)
+        if DEBUG_VERBOSE:
+            _dump_dome_light_state(light, f"after env_{env_id} -> {chosen_hdri}")
         updated += 1
 
     if updated == 0:
