@@ -292,7 +292,9 @@ def _dump_dome_light_state(light, header):
         print(f"[dome-light]   resolved_paths=<error {exc}>", flush=True)
 
 def randomize_lighting(stage, hdri_folder_path, env_ids=None):
-    """Assign one random HDRI to every env-local DomeLight in the stage."""
+    """Assign one random HDRI to every env-local DomeLight in the stage 
+    using the division method to prevent over-exposure while keeping backgrounds visible.
+    """
     # Get a list of all HDR/EXR files in your folder
     valid_exts = (".hdr", ".exr")
     hdri_files = [f for f in os.listdir(hdri_folder_path) if f.endswith(valid_exts)]
@@ -303,7 +305,7 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
     chosen_hdri = random.choice(hdri_files)
     full_path = os.path.join(hdri_folder_path, chosen_hdri)
     
-    # This is the master intensity that will only be applied to env_0
+    # This is the TOTAL desired light intensity for the entire scene combined
     target_intensity = random.uniform(400.0, 800.0)
     
     if DEBUG_VERBOSE:
@@ -312,6 +314,7 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
         print(f"[randomize_lighting] full_path={full_path}", flush=True)
         print(f"[randomize_lighting] full_path_exists={os.path.exists(full_path)}", flush=True)
 
+    # Resolve env_ids if not provided
     if env_ids is None:
         env_ids = []
         envs_root = stage.GetPrimAtPath("/World/envs")
@@ -323,11 +326,26 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
                     if suffix.isdigit():
                         env_ids.append(int(suffix))
 
-    updated = 0
+    # --- THE DIVISION FIX: First, find all valid lights to get an accurate count ---
+    valid_env_lights = []
     for env_id in env_ids:
         prim = stage.GetPrimAtPath(f"/World/envs/env_{env_id}/Scene/DomeLight")
-        if not prim or not prim.IsA(UsdLux.DomeLight):
-            continue
+        if prim and prim.IsA(UsdLux.DomeLight):
+            valid_env_lights.append((env_id, prim))
+
+    if not valid_env_lights:
+        print("[WARNING] No env-local DomeLight prims were found to update.")
+        return
+
+    # Divide the total target intensity evenly among all active environments
+    fractional_intensity = target_intensity / len(valid_env_lights)
+
+    if DEBUG_VERBOSE:
+        print(f"[dome-light] Total Target: {target_intensity} distributed across {len(valid_env_lights)} envs "
+              f"({fractional_intensity:.4f} intensity per light)", flush=True)
+
+    # --- Second, apply the fractional intensity to every environment ---
+    for env_id, prim in valid_env_lights:
         light = UsdLux.DomeLight(prim)
         if DEBUG_VERBOSE:
             _dump_dome_light_state(light, f"before env_{env_id}")
@@ -335,15 +353,10 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
         # USD automatically wraps paths in @...@ so pass the raw path
         light.GetTextureFileAttr().Set(full_path)
         
-        # --- THE FIX: KEEP ENV 0 BRIGHT, TURN OTHERS TO 1.0 ---
-        if env_id == 0:
-            light.GetIntensityAttr().Set(target_intensity)
-        else:
-            # value set is dim enough to not ruin the exposure, but high enough 
-            # to keep the HDRI visible in the local cameras!
-            light.GetIntensityAttr().Set(50.0)
+        # Every camera gets the exact same proportional brightness
+        light.GetIntensityAttr().Set(fractional_intensity)
         
-        # (Optional but highly recommended) Force latlong format to prevent viewport blackouts
+        # Force latlong format to prevent viewport blackouts
         format_attr = light.GetTextureFormatAttr()
         if format_attr:
             format_attr.Set("latlong")
@@ -353,10 +366,6 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
         if DEBUG_VERBOSE:
             print(f"[dome-light]   filesystem_path={full_path}", flush=True)
             _dump_dome_light_state(light, f"after env_{env_id} -> {chosen_hdri}")
-        updated += 1
-
-    if updated == 0:
-        print("[WARNING] No env-local DomeLight prims were found to update.")
 
 
 def disable_palm_physics(stage, palm_root_path):
