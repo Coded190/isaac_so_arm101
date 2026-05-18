@@ -332,6 +332,23 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
         # USD automatically wraps paths in @...@ so pass the raw path
         light.GetTextureFileAttr().Set(full_path)
         light.GetIntensityAttr().Set(intensity)
+        
+        # Force DomeLight visibility and rendering in all modes
+        # These attributes ensure the environment map is used even in camera-lights mode
+        try:
+            # Make sure the light prim is active and visible
+            prim.SetActive(True)
+            from pxr import UsdGeom
+            imageable = UsdGeom.Imageable(prim)
+            imageable.MakeVisible()
+            
+            # Set renderable = true to ensure it's included in all render modes
+            if hasattr(prim, 'SetCustomDataByKey'):
+                prim.SetCustomDataByKey('renderable', True)
+        except Exception as e:
+            if DEBUG_VERBOSE:
+                print(f"[dome-light] warning setting visibility attrs: {e}", flush=True)
+        
         if DEBUG_VERBOSE:
             print(f"[dome-light]   filesystem_path={full_path}", flush=True)
             _dump_dome_light_state(light, f"after env_{env_id} -> {chosen_hdri}")
