@@ -396,7 +396,7 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
         
     # Set the baseline brightness. Since this is one global light (not multiplied 
     # by env count), we set the raw total intensity here. 
-    ambient_light.GetIntensityAttr().Set(250.0)
+    ambient_light.GetIntensityAttr().Set(500.0)
     ambient_light.GetColorAttr().Set(Gf.Vec3f(1.0, 1.0, 1.0))
     
     # Explicitly turn off shadows for this baseline fill light
