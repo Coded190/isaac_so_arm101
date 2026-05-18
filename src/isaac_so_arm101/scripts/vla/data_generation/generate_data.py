@@ -272,6 +272,19 @@ def _dump_dome_light_state(light, header):
             print(f"[dome-light]   textureFormat={texture_format_attr.Get()}", flush=True)
     except Exception as exc:
         print(f"[dome-light]   textureFormat=<error {exc}>", flush=True)
+    try:
+        texture_value = light.GetTextureFileAttr().Get()
+        texture_text = str(texture_value)
+        stage_root = light.GetPrim().GetStage().GetRootLayer()
+        root_dir = os.path.dirname(stage_root.realPath) if stage_root and stage_root.realPath else os.getcwd()
+        resolved_from_root = os.path.abspath(os.path.join(root_dir, texture_text))
+        resolved_from_cwd = os.path.abspath(os.path.join(os.getcwd(), texture_text))
+        print(f"[dome-light]   cwd={os.getcwd()}", flush=True)
+        print(f"[dome-light]   stage_root={stage_root.realPath if stage_root else None}", flush=True)
+        print(f"[dome-light]   resolved_from_root={resolved_from_root}", flush=True)
+        print(f"[dome-light]   resolved_from_cwd={resolved_from_cwd}", flush=True)
+    except Exception as exc:
+        print(f"[dome-light]   resolved_paths=<error {exc}>", flush=True)
 
 def randomize_lighting(stage, hdri_folder_path, env_ids=None):
     """Assign one random HDRI to every env-local DomeLight in the stage."""
