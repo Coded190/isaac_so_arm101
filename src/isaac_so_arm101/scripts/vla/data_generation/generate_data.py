@@ -894,7 +894,7 @@ def main():
         disable_palm_physics(stage, palm_path)
     episode_rng = np.random.default_rng(getattr(args_cli, "seed", None))
     
-    HDRI_FOLDER_PATH = "/home/cirplab/moore/isaac_data/palm_tree_models/blender/pretoria_gardens_4k"
+    HDRI_FOLDER_PATH = "/home/cirplab/moore/isaac_data/palm_tree_models/blender/pretoria_gardens_4k/hdri"
     randomize_lighting(stage, HDRI_FOLDER_PATH, env_ids=range(num_envs))
 
     randomize_robot_root_pose(
