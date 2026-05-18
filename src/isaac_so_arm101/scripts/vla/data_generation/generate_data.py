@@ -292,13 +292,8 @@ def _dump_dome_light_state(light, header):
         print(f"[dome-light]   resolved_paths=<error {exc}>", flush=True)
 
 def randomize_lighting(stage, hdri_folder_path, env_ids=None):
-    """Assign a random HDRI to env_0's DomeLight and mute all other cloned env lights.
-    
-    This acts as a clean global light because env_0's DomeLight is already tracked by the
-    renderer, avoids creating runtime root prims that Hydra might ignore, and safely 
-    prevents 100x overlapping brightness amplification.
-    """
-    # 1. Pick a random HDRI
+    """Assign one random HDRI to every env-local DomeLight in the stage."""
+    # Get a list of all HDR/EXR files in your folder
     valid_exts = (".hdr", ".exr")
     hdri_files = [f for f in os.listdir(hdri_folder_path) if f.endswith(valid_exts)]
     if not hdri_files:
@@ -307,48 +302,43 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
 
     chosen_hdri = random.choice(hdri_files)
     full_path = os.path.join(hdri_folder_path, chosen_hdri)
+    intensity = random.uniform(400.0, 800.0)
     
-    # Standard high intensity for a single active light in this setup
-    intensity = random.uniform(500.0, 1500.0)
-
     if DEBUG_VERBOSE:
         print(f"[randomize_lighting] chosen_hdri={chosen_hdri}", flush=True)
+        print(f"[randomize_lighting] hdri_folder_path={hdri_folder_path}", flush=True)
+        print(f"[randomize_lighting] full_path={full_path}", flush=True)
+        print(f"[randomize_lighting] full_path_exists={os.path.exists(full_path)}", flush=True)
 
-    # 2. Loop through all cloned environments
-    envs_root = stage.GetPrimAtPath("/World/envs")
-    if envs_root:
-        for env_prim in envs_root.GetChildren():
-            env_name = env_prim.GetName()  # e.g., "env_0", "env_1", etc.
-            local_light_path = f"{env_prim.GetPath()}/Scene/DomeLight"
-            local_prim = stage.GetPrimAtPath(local_light_path)
-            
-            if local_prim and local_prim.IsA(UsdLux.DomeLight):
-                light = UsdLux.DomeLight(local_prim)
-                
-                if env_name == "env_0":
-                    # --- CONFIGURING ENV_0 AS THE SOLE ACTIVE LIGHT ---
-                    light.GetTextureFileAttr().Set(full_path)
-                    light.GetIntensityAttr().Set(intensity)
-                    
-                    # Set format to latlong to prevent viewport black background issues
-                    format_attr = light.GetTextureFormatAttr()
-                    if format_attr:
-                        format_attr.Set("latlong")
-                    else:
-                        light.CreateTextureFormatAttr("latlong")
-                        
-                    exposure_attr = light.GetExposureAttr()
-                    if exposure_attr:
-                        exposure_attr.Set(0.0)
-                    else:
-                        light.CreateExposureAttr(0.0)
-                else:
-                    # --- MUTING ALL OTHER ENVIRONMENT SUNS ---
-                    # Set intensity to 0 to completely turn it off so they don't multiply
-                    light.GetIntensityAttr().Set(0.0)
+    if env_ids is None:
+        env_ids = []
+        envs_root = stage.GetPrimAtPath("/World/envs")
+        if envs_root:
+            for env_prim in envs_root.GetChildren():
+                name = env_prim.GetName()
+                if name.startswith("env_"):
+                    suffix = name.split("env_", 1)[1]
+                    if suffix.isdigit():
+                        env_ids.append(int(suffix))
 
-    if DEBUG_VERBOSE:
-        print(f"[dome-light] Plan B Active: env_0 light set to {chosen_hdri} (intensity={intensity}). All other env lights muted.")
+    updated = 0
+    for env_id in env_ids:
+        prim = stage.GetPrimAtPath(f"/World/envs/env_{env_id}/Scene/DomeLight")
+        if not prim or not prim.IsA(UsdLux.DomeLight):
+            continue
+        light = UsdLux.DomeLight(prim)
+        if DEBUG_VERBOSE:
+            _dump_dome_light_state(light, f"before env_{env_id}")
+        # USD automatically wraps paths in @...@ so pass the raw path
+        light.GetTextureFileAttr().Set(full_path)
+        light.GetIntensityAttr().Set(intensity)
+        if DEBUG_VERBOSE:
+            print(f"[dome-light]   filesystem_path={full_path}", flush=True)
+            _dump_dome_light_state(light, f"after env_{env_id} -> {chosen_hdri}")
+        updated += 1
+
+    if updated == 0:
+        print("[WARNING] No env-local DomeLight prims were found to update.")
 
 
 def disable_palm_physics(stage, palm_root_path):
