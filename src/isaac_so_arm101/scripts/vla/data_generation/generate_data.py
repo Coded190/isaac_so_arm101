@@ -274,7 +274,7 @@ def _dump_dome_light_state(light, header):
         print(f"[dome-light]   textureFormat=<error {exc}>", flush=True)
     try:
         texture_value = light.GetTextureFileAttr().Get()
-        texture_text = str(texture_value)
+        texture_text = str(texture_value).strip("@") if texture_value else ""
         stage_root = light.GetPrim().GetStage().GetRootLayer()
         root_dir = os.path.dirname(stage_root.realPath) if stage_root and stage_root.realPath else os.getcwd()
         resolved_from_root = os.path.abspath(os.path.join(root_dir, texture_text))
@@ -283,6 +283,11 @@ def _dump_dome_light_state(light, header):
         print(f"[dome-light]   stage_root={stage_root.realPath if stage_root else None}", flush=True)
         print(f"[dome-light]   resolved_from_root={resolved_from_root}", flush=True)
         print(f"[dome-light]   resolved_from_cwd={resolved_from_cwd}", flush=True)
+        if os.path.isabs(texture_text):
+            print(f"[dome-light]   absolute_path_exists={os.path.exists(texture_text)}", flush=True)
+        else:
+            print(f"[dome-light]   from_root_exists={os.path.exists(resolved_from_root)}", flush=True)
+            print(f"[dome-light]   from_cwd_exists={os.path.exists(resolved_from_cwd)}", flush=True)
     except Exception as exc:
         print(f"[dome-light]   resolved_paths=<error {exc}>", flush=True)
 
@@ -320,6 +325,8 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
             _dump_dome_light_state(light, f"before env_{env_id}")
         light.GetTextureFileAttr().Set(full_path)
         light.GetIntensityAttr().Set(intensity)
+        # Ensure the DomeLight prim is visible for rendering
+        prim.GetVisibilityAttr().Set("inherited")
         if DEBUG_VERBOSE:
             print(f"[dome-light]   filesystem_path={full_path}", flush=True)
             _dump_dome_light_state(light, f"after env_{env_id} -> {chosen_hdri}")
