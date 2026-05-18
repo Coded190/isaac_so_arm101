@@ -329,10 +329,10 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
         light = UsdLux.DomeLight(prim)
         if DEBUG_VERBOSE:
             _dump_dome_light_state(light, f"before env_{env_id}")
-        light.GetTextureFileAttr().Set(full_path)
+        # Wrap path in USD syntax
+        usd_path = f"@{full_path}@"
+        light.GetTextureFileAttr().Set(usd_path)
         light.GetIntensityAttr().Set(intensity)
-        # Ensure the DomeLight prim is visible for rendering
-        prim.GetVisibilityAttr().Set("inherited")
         if DEBUG_VERBOSE:
             print(f"[dome-light]   filesystem_path={full_path}", flush=True)
             _dump_dome_light_state(light, f"after env_{env_id} -> {chosen_hdri}")
