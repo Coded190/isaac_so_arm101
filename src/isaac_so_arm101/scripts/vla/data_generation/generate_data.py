@@ -339,9 +339,9 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
         if env_id == 0:
             light.GetIntensityAttr().Set(target_intensity)
         else:
-            # 1.0 is dim enough to not ruin the exposure, but high enough 
+            # 400.0 is dim enough to not ruin the exposure, but high enough 
             # to keep the HDRI visible in the local cameras!
-            light.GetIntensityAttr().Set(1.0)
+            light.GetIntensityAttr().Set(400.0)
         
         # (Optional but highly recommended) Force latlong format to prevent viewport blackouts
         format_attr = light.GetTextureFormatAttr()
