@@ -345,7 +345,7 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
     
     # Boost the diffuse factor to fill in the deep shadows under the palm crown.
     # Try 3.0 or 4.0. Higher numbers will bring out more details in the dark leaves!
-    diffuse_boost = 6.0 
+    diffuse_boost = 10.0 
     diffuse_value = fractional_multiplier * diffuse_boost
 
     if DEBUG_VERBOSE:
