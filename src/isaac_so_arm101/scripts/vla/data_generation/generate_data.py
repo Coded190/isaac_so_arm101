@@ -306,7 +306,7 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
     full_path = os.path.join(hdri_folder_path, chosen_hdri)
     
     # This is the TOTAL desired light intensity for the entire scene combined
-    target_intensity = random.uniform(400.0, 800.0)
+    target_intensity = random.uniform(10000.0, 15000.0)
     
     if DEBUG_VERBOSE:
         print(f"[randomize_lighting] chosen_hdri={chosen_hdri}", flush=True)
