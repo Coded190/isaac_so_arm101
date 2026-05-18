@@ -283,6 +283,7 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
         return
 
     chosen_hdri = random.choice(hdri_files)
+    authored_texture_path = f"./hdri/{chosen_hdri}"
     full_path = os.path.join(hdri_folder_path, chosen_hdri)
     intensity = random.uniform(500.0, 1500.0)
 
@@ -305,9 +306,11 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
         light = UsdLux.DomeLight(prim)
         if DEBUG_VERBOSE:
             _dump_dome_light_state(light, f"before env_{env_id}")
-        light.GetTextureFileAttr().Set(full_path)
+        light.GetTextureFileAttr().Set(authored_texture_path)
         light.GetIntensityAttr().Set(intensity)
         if DEBUG_VERBOSE:
+            print(f"[dome-light]   filesystem_path={full_path}", flush=True)
+            print(f"[dome-light]   authored_texture_path={authored_texture_path}", flush=True)
             _dump_dome_light_state(light, f"after env_{env_id} -> {chosen_hdri}")
         updated += 1
 
