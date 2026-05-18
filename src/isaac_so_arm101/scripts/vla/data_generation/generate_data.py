@@ -246,7 +246,7 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
 
     chosen_hdri = random.choice(hdri_files)
     full_path = os.path.join(hdri_folder_path, chosen_hdri)
-    intensity = random.uniform(500.0, 1500.0)
+    intensity = random.uniform(0.8, 1.3)
 
     if env_ids is None:
         env_ids = []
@@ -266,6 +266,20 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
             continue
         light = UsdLux.DomeLight(prim)
         light.GetTextureFileAttr().Set(full_path)
+        try:
+            texture_format_attr = light.GetTextureFormatAttr()
+            if texture_format_attr:
+                texture_format_attr.Set("latlong")
+            elif hasattr(light, "CreateTextureFormatAttr"):
+                light.CreateTextureFormatAttr("latlong")
+        except Exception:
+            pass
+        try:
+            exposure_attr = light.GetExposureAttr()
+            if exposure_attr:
+                exposure_attr.Set(0.0)
+        except Exception:
+            pass
         light.GetIntensityAttr().Set(intensity)
         updated += 1
 
