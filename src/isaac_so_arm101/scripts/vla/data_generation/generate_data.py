@@ -292,8 +292,11 @@ def _dump_dome_light_state(light, header):
         print(f"[dome-light]   resolved_paths=<error {exc}>", flush=True)
 
 def randomize_lighting(stage, hdri_folder_path, env_ids=None):
-    """Assign one random HDRI to every env-local DomeLight in the stage 
-    using the division method to prevent over-exposure while keeping backgrounds visible.
+    """Assign one random HDRI to every env-local DomeLight in the stage.
+    
+    Decoupled approach: Keeps the base intensity high so the background image 
+    is bright, but divides surface diffuse/specular multipliers so the 100 
+    overlapping lights do not over-expose or create harsh glare on the 3D models.
     """
     # Get a list of all HDR/EXR files in your folder
     valid_exts = (".hdr", ".exr")
@@ -305,8 +308,8 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
     chosen_hdri = random.choice(hdri_files)
     full_path = os.path.join(hdri_folder_path, chosen_hdri)
     
-    # This is the TOTAL desired light intensity for the entire scene combined
-    target_intensity = random.uniform(10000.0, 15000.0)
+    # 1. Target intensity for a rich, vibrant background sky texture
+    target_intensity = random.uniform(600.0, 1200.0)
     
     if DEBUG_VERBOSE:
         print(f"[randomize_lighting] chosen_hdri={chosen_hdri}", flush=True)
@@ -314,7 +317,6 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
         print(f"[randomize_lighting] full_path={full_path}", flush=True)
         print(f"[randomize_lighting] full_path_exists={os.path.exists(full_path)}", flush=True)
 
-    # Resolve env_ids if not provided
     if env_ids is None:
         env_ids = []
         envs_root = stage.GetPrimAtPath("/World/envs")
@@ -326,7 +328,7 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
                     if suffix.isdigit():
                         env_ids.append(int(suffix))
 
-    # --- THE DIVISION FIX: First, find all valid lights to get an accurate count ---
+    # Collect all valid environment lights first to get an accurate count
     valid_env_lights = []
     for env_id in env_ids:
         prim = stage.GetPrimAtPath(f"/World/envs/env_{env_id}/Scene/DomeLight")
@@ -337,24 +339,39 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
         print("[WARNING] No env-local DomeLight prims were found to update.")
         return
 
-    # Divide the total target intensity evenly among all active environments
-    fractional_intensity = target_intensity / len(valid_env_lights)
+    # 2. Calculate the fraction to prevent surface over-exposure
+    fractional_multiplier = 1.0 / len(valid_env_lights)
 
     if DEBUG_VERBOSE:
-        print(f"[dome-light] Total Target: {target_intensity} distributed across {len(valid_env_lights)} envs "
-              f"({fractional_intensity:.4f} intensity per light)", flush=True)
+        print(f"[dome-light] Setting background intensity to {target_intensity} "
+              f"and surface mesh multiplier to {fractional_multiplier:.4f}", flush=True)
 
-    # --- Second, apply the fractional intensity to every environment ---
     for env_id, prim in valid_env_lights:
         light = UsdLux.DomeLight(prim)
         if DEBUG_VERBOSE:
             _dump_dome_light_state(light, f"before env_{env_id}")
             
-        # USD automatically wraps paths in @...@ so pass the raw path
+        # Pass the HDRI texture path
         light.GetTextureFileAttr().Set(full_path)
         
-        # Every camera gets the exact same proportional brightness
-        light.GetIntensityAttr().Set(fractional_intensity)
+        # Keep intensity high so the background texture is fully visible and rich
+        light.GetIntensityAttr().Set(target_intensity)
+        
+        # --- THE FIX: Scale down how much this light interacts with 3D surfaces ---
+        diffuse_attr = light.GetDiffuseAttr()
+        if diffuse_attr:
+            diffuse_attr.Set(fractional_multiplier)
+        else:
+            light.CreateDiffuseAttr(fractional_multiplier)
+            
+        # Scale down specular interaction to get rid of that harsh artificial shininess
+        specular_attr = light.GetSpecularAttr()
+        if specular_attr:
+            # Tip: If your models are still a bit too shiny, you can multiply 
+            # this by 0.5 to soften highlights even further!
+            specular_attr.Set(fractional_multiplier)
+        else:
+            light.CreateSpecularAttr(fractional_multiplier)
         
         # Force latlong format to prevent viewport blackouts
         format_attr = light.GetTextureFormatAttr()
@@ -363,6 +380,13 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
         else:
             light.CreateTextureFormatAttr("latlong")
             
+        # Ensure exposure offset is normalized
+        exposure_attr = light.GetExposureAttr()
+        if exposure_attr:
+            exposure_attr.Set(0.0)
+        else:
+            light.CreateExposureAttr(0.0)
+
         if DEBUG_VERBOSE:
             print(f"[dome-light]   filesystem_path={full_path}", flush=True)
             _dump_dome_light_state(light, f"after env_{env_id} -> {chosen_hdri}")
