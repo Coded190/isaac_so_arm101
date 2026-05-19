@@ -802,6 +802,9 @@ def randomize_robot_root_pose(env, stage, palm_root_paths, episode_rng,
     env_ids_t = torch.as_tensor(env_ids, device=device, dtype=torch.long)
 
     new_root = robot.data.default_root_state[env_ids_t].clone()
+    # Get CURRENT robot position (world frame) to calculate initial radius, not default_root_state
+    current_root_pos_w = robot.data.root_pos_w[env_ids_t].cpu().numpy().astype(np.float64)
+    
     # default_root_state is in env-local frame; trunk_xy from get_crown_centroid
     # is world-frame. With multi-env (env_spacing > 0), env origins are offset
     # in world, so we must add the env origin to default_xy to compare apples
@@ -816,11 +819,18 @@ def randomize_robot_root_pose(env, stage, palm_root_paths, episode_rng,
         trunk_z = float(crown[2])
         trunk_xys.append(trunk_xy)
         trunk_zs.append(trunk_z)
-        default_xy_local = new_root[i, :2].cpu().numpy().astype(np.float64)
-        default_xy = default_xy_local + env_origins[i]   # local → world
-        rel = default_xy - trunk_xy
+        
+        # Use current robot position (world frame) for radius calculation
+        current_xy = current_root_pos_w[i, :2]
+        rel = current_xy - trunk_xy
         radius0 = float(np.linalg.norm(rel))
         bearing0 = float(np.arctan2(rel[1], rel[0]))
+        
+        if DEBUG_VERBOSE:
+            radius_after_offset = max(radius0 - float(inward_offset), MIN_TREE_RADIUS)
+            print(f"[randomize env {env_id}] current_pos={current_xy} trunk={trunk_xy} "
+                  f"radius0={radius0:.3f}m radius_after_offset={radius_after_offset:.3f}m", 
+                  flush=True)
 
         new_x = new_y = None
         last_dist = None
