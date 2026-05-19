@@ -205,8 +205,9 @@ ANGLE_RANDOM_RANGE = float(np.deg2rad(45.0))  # ±45° forward arc.
 # Positive value moves the robot closer to the tree (subtracted from the
 # default radius). NEGATIVE pushes it further away. 0.0 keeps default.
 TREE_INWARD_OFFSET = 0.50  # positive = pull robot CLOSER to tree (reachable distance)
-# Lower bound on the radius — never go closer than this to the trunk.
-MIN_TREE_RADIUS = 0.08
+# Clamp the final spawn radius to this range (meters)
+MIN_TREE_RADIUS = 0.50  # Don't spawn too close (arm can reach better from distance)
+MAX_TREE_RADIUS = 2.00  # Don't spawn too far (arm needs reasonable reach)
 # Reject any placement whose XY position lands within this many meters of
 # any palm leaf — the base would otherwise spawn inside / through a leaf.
 LEAF_CLEARANCE = 0.10
@@ -301,6 +302,56 @@ def _dump_dome_light_state(light, header):
             print(f"[dome-light]   from_cwd_exists={os.path.exists(resolved_from_cwd)}", flush=True)
     except Exception as exc:
         print(f"[dome-light]   resolved_paths=<error {exc}>", flush=True)
+
+def _resolve_material_texture_paths(stage, prim_path):
+    """Walk through all material prims under prim_path and resolve relative texture paths.
+    
+    This fixes issues where USD files have embedded relative paths like './textures/...'
+    that don't resolve from the Isaac Sim USD root. We rewrite them to absolute paths
+    based on the USD stage's root resolver context.
+    """
+    from pxr import Usd, UsdShade, Sdf
+    
+    prim = stage.GetPrimAtPath(prim_path)
+    if not prim.IsValid():
+        return
+    
+    # Walk all descendants looking for Material prims
+    for desc_prim in Usd.PrimRange(prim):
+        if not desc_prim.IsA(UsdShade.Material):
+            continue
+        
+        # For each Material, find all input connections and properties that might contain file paths
+        try:
+            # Check shader inputs for texture file attributes
+            material = UsdShade.Material(desc_prim)
+            surface_output = material.GetSurfaceOutput()
+            if surface_output:
+                shader_prim = surface_output.GetConnectedSource()[0]
+                if shader_prim:
+                    shader = UsdShade.Shader(shader_prim)
+                    # Iterate through shader inputs
+                    for shader_input in shader.GetInputs():
+                        attr = shader_input.GetAttr()
+                        if not attr:
+                            continue
+                        attr_name = attr.GetName()
+                        # Look for texture file attributes (common names)
+                        if 'texture' in attr_name.lower() or 'file' in attr_name.lower():
+                            val = attr.Get()
+                            if val and isinstance(val, (str, type(Sdf.AssetPath("")))):
+                                path_str = str(val)
+                                if path_str.startswith("./") or path_str.startswith("../"):
+                                    # Resolve relative path
+                                    stage_root = os.path.dirname(stage.GetRootLayer().realPath)
+                                    abs_path = os.path.abspath(os.path.join(stage_root, path_str))
+                                    if os.path.exists(abs_path):
+                                        attr.Set(abs_path)
+                                        if DEBUG_VERBOSE:
+                                            print(f"[resolve_materials] {attr_name}: {path_str} -> {abs_path}")
+        except Exception as e:
+            if DEBUG_VERBOSE:
+                print(f"[resolve_materials] Error processing {desc_prim.GetPath()}: {e}")
 
 def randomize_lighting(stage, hdri_folder_path, env_ids=None):
     """Assign one random HDRI to every env-local DomeLight in the stage.
@@ -838,6 +889,7 @@ def randomize_robot_root_pose(env, stage, palm_root_paths, episode_rng,
         for attempt in range(PLACEMENT_MAX_ATTEMPTS):
             theta = float(episode_rng.uniform(-angle_range, angle_range))
             radius = max(radius0 - float(inward_offset), MIN_TREE_RADIUS)
+            radius = min(radius, MAX_TREE_RADIUS)  # Also apply upper bound
             bearing = bearing0 + theta
             cand_x = float(trunk_xy[0]) + radius * float(np.cos(bearing))
             cand_y = float(trunk_xy[1]) + radius * float(np.sin(bearing))
@@ -1090,6 +1142,13 @@ def main():
     import omni.usd
     from pxr import UsdGeom
     stage = omni.usd.get_context().get_stage()
+    
+    # Resolve all relative material texture paths to absolute paths
+    # This fixes USD files with embedded relative paths like './textures/...'
+    for env_id in range(num_envs):
+        palm_root_path = get_palm_root_path(env_id)
+        _resolve_material_texture_paths(stage, palm_root_path)
+    
     palm_root_paths = [get_palm_root_path(env_id) for env_id in range(num_envs)]
     
     # Get the crown centroid position for the first env to initialize robot nearby
