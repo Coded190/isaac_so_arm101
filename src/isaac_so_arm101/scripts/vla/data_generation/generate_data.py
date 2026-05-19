@@ -607,19 +607,20 @@ def get_deterministic_target(stage, palm_root_path, offset=HOVER_OFFSET):
     return get_crown_centroid(stage, palm_root_path) + offset
 
 
-def prepare_episode_targets(stage, palm_root_paths, episode_rng, cull_prob,
-                             robot_xys=None, env_ids=None):
-    """Compute hover targets per env. If ``robot_xys`` is given, the target is
-    pulled HOVER_PULLBACK_M meters along the crown→robot XY direction so the
-    EE lands short of the trunk instead of past it."""
+def cull_episode_leaves(stage, palm_root_paths, episode_rng, cull_prob, env_ids=None):
+    """Cull top leaves for each environment based on cull_prob.
+    
+    Should be called BEFORE positioning the robot so that leaf clearance checks
+    and robot positioning are based on the final (culled) leaf geometry.
+    """
     if env_ids is None:
         env_ids = list(range(len(palm_root_paths)))
-    targets = []
     for env_id in env_ids:
         palm_root_path = palm_root_paths[env_id]
+        # Re-activate all leaves first in case they were culled in a previous episode
         set_leaf_prims_active(stage, palm_root_path, active=True)
-        crown_centroid = get_crown_centroid(stage, palm_root_path)
         if episode_rng.random() < cull_prob:
+            crown_centroid = get_crown_centroid(stage, palm_root_path)
             keep_ratio = float(episode_rng.uniform(
                 LEAF_KEEP_RATIO_MIN, LEAF_KEEP_RATIO_MAX,
             ))
@@ -628,6 +629,23 @@ def prepare_episode_targets(stage, palm_root_paths, episode_rng, cull_prob,
                 crown_z=crown_centroid[2],
                 keep_ratio=keep_ratio,
             )
+
+
+def prepare_episode_targets(stage, palm_root_paths, episode_rng, cull_prob,
+                             robot_xys=None, env_ids=None):
+    """Compute hover targets per env. If ``robot_xys`` is given, the target is
+    pulled HOVER_PULLBACK_M meters along the crown→robot XY direction so the
+    EE lands short of the trunk instead of past it.
+    
+    NOTE: Call cull_episode_leaves() BEFORE this function so that targets are
+    based on the final (post-cull) leaf geometry.
+    """
+    if env_ids is None:
+        env_ids = list(range(len(palm_root_paths)))
+    targets = []
+    for env_id in env_ids:
+        palm_root_path = palm_root_paths[env_id]
+        crown_centroid = get_crown_centroid(stage, palm_root_path)
         target = get_deterministic_target(stage, palm_root_path)
         if robot_xys is not None and HOVER_PULLBACK_M > 0.0:
             rxy = np.asarray(robot_xys[env_id], dtype=np.float64)
@@ -756,13 +774,12 @@ def randomize_robot_root_pose(env, stage, palm_root_paths, episode_rng,
     """Place the robot at a random angle on a circle around the tree.
 
     With ``angle_range = π`` the robot can spawn anywhere on the full 360°
-    circle around the trunk. Uses the crown-centroid XY (same XY as the
-    blue hover marker) as the horizontal trunk target, but at base height
-    for the face vector. The XY distance to the trunk is preserved
-    (optionally shrunk by ``inward_offset``) and world Z is unchanged.
-    Yaw is set so the robot faces the tree from its new position. A
-    yellow marker is dropped at the target so you can see what the base
-    is aiming at.
+    circle around the trunk. Uses the crown-centroid XYZ (same as the
+    blue hover marker) for the target position. The XY distance to the trunk
+    is preserved (optionally shrunk by ``inward_offset``) and the robot base
+    Z is aligned to the crown's Z position. Yaw is set so the robot faces
+    the tree from its new position. A yellow marker is dropped at the target
+    so you can see what the base is aimed at.
     """
     robot = env.unwrapped.scene["robot"]
     device = robot.data.default_root_state.device
@@ -777,11 +794,14 @@ def randomize_robot_root_pose(env, stage, palm_root_paths, episode_rng,
     # to apples. Single-env case has env_origin=(0,0,0) and is unchanged.
     env_origins = env.unwrapped.scene.env_origins[env_ids_t, :2].cpu().numpy().astype(np.float64)
     trunk_xys = []
+    trunk_zs = []
     for i, env_id in enumerate(env_ids):
         palm_root_path = palm_root_paths[env_id]
         crown = get_crown_centroid(stage, palm_root_path)
         trunk_xy = np.array([float(crown[0]), float(crown[1])], dtype=np.float64)
+        trunk_z = float(crown[2])
         trunk_xys.append(trunk_xy)
+        trunk_zs.append(trunk_z)
         default_xy_local = new_root[i, :2].cpu().numpy().astype(np.float64)
         default_xy = default_xy_local + env_origins[i]   # local → world
         rel = default_xy - trunk_xy
@@ -790,6 +810,7 @@ def randomize_robot_root_pose(env, stage, palm_root_paths, episode_rng,
 
         new_x = new_y = None
         last_dist = None
+        cand_x = cand_y = 0.0  # Initialize before loop
         for attempt in range(PLACEMENT_MAX_ATTEMPTS):
             theta = float(episode_rng.uniform(-angle_range, angle_range))
             radius = max(radius0 - float(inward_offset), MIN_TREE_RADIUS)
@@ -824,6 +845,7 @@ def randomize_robot_root_pose(env, stage, palm_root_paths, episode_rng,
 
         new_root[i, 0] = new_x
         new_root[i, 1] = new_y
+        new_root[i, 2] = trunk_zs[i]
         new_root[i, 3:7] = torch.tensor(quat, dtype=new_root.dtype, device=device)
 
     robot.write_root_pose_to_sim(new_root[:, :7], env_ids=env_ids_t)
@@ -837,14 +859,15 @@ def randomize_robot_root_pose(env, stage, palm_root_paths, episode_rng,
                                     device=device)
     set_rest_pose(env, rest_pose_tensor, env_ids=env_ids)
 
-    # Drop a yellow marker at (trunk_xy, base_z) so the user can verify the
-    # base is being aimed at the right horizontal target. Also re-aim the
-    # active viewport camera at the first reset env so OBS captures a
-    # fresh side-view of the robot+crown each episode.
+    # Drop a yellow marker at (trunk_xy, trunk_z) so the user can verify the
+    # base is being aimed at the right horizontal target and Z level.
+    # Also re-aim the active viewport camera at the first reset env so OBS
+    # captures a fresh side-view of the robot+crown each episode.
     for i, env_id in enumerate(env_ids):
         trunk_xy = trunk_xys[i]
+        trunk_z = trunk_zs[i]
         base_z = float(new_root[i, 2].cpu())
-        marker_xyz = (float(trunk_xy[0]), float(trunk_xy[1]), base_z)
+        marker_xyz = (float(trunk_xy[0]), float(trunk_xy[1]), trunk_z)
         spawn_target_marker(
             stage, marker_xyz,
             marker_path=f"/World/debug_target_markers/face_target/env_{env_id}",
@@ -1051,6 +1074,15 @@ def main():
     
     HDRI_FOLDER_PATH = "/home/cirplab/moore/isaac_data/palm_tree_models/blender/pretoria_gardens_4k/hdri"
     randomize_lighting(stage, HDRI_FOLDER_PATH, env_ids=range(num_envs))
+
+    # Cull leaves BEFORE positioning the robot so that robot placement and arm
+    # targets are both based on the same (post-cull) leaf geometry
+    cull_episode_leaves(
+        stage=stage,
+        palm_root_paths=palm_root_paths,
+        episode_rng=episode_rng,
+        cull_prob=args_cli.top_leaf_cull_prob,
+    )
 
     randomize_robot_root_pose(
         env=env, stage=stage, palm_root_paths=palm_root_paths,
