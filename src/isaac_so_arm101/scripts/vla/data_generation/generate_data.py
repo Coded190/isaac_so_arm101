@@ -1031,12 +1031,10 @@ def main():
         use_fabric=not args_cli.disable_fabric,
     )
 
-    default_pos = env_cfg.scene.robot.init_state.pos
-    env_cfg.scene.robot.init_state.pos = (
-        default_pos[0] + 0.05,
-        default_pos[1] - 0.179,
-        default_pos[2] + 0.1524,
-    )
+    # Set a neutral initial position; randomize_robot_root_pose() will
+    # immediately teleport the robot to the correct location near palm_tree_crown.
+    # The Y offset keeps the robot at the center of the multi-env grid.
+    env_cfg.scene.robot.init_state.pos = (0.0, 0.0, 0.5)
     env_cfg.scene.robot.init_state.joint_pos = {
         "base_yaw": REST_POSE_VALUES[0],
         "shoulder_pitch": REST_POSE_VALUES[1],
