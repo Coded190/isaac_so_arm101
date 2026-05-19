@@ -219,15 +219,12 @@ def get_palm_root_path(env_id):
 
 
 def _get_palm_crown_prim(stage, palm_root_path):
-    from pxr import Usd
     palm = stage.GetPrimAtPath(palm_root_path)
     if not palm or not palm.IsValid():
         return None
-    # FIX: Recursively search the entire palm for the crown, bypassing any 
-    # intermediate 'Palm_Tree' collections Blender may have generated.
-    for prim in Usd.PrimRange(palm):
-        if prim.GetName().lower() == "crown":
-            return prim
+    crown = palm.GetChild("crown")
+    if crown and crown.IsValid():
+        return crown
     return palm
 
 def print_joint_properties(joint_prim):
@@ -421,25 +418,41 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
 
 
 def disable_palm_physics(stage, palm_root_path):
+    """Updates palm tree leaves to be lightweight, and completely loosens their joints."""
     from pxr import Usd, UsdGeom, UsdPhysics
     
     palm = stage.GetPrimAtPath(palm_root_path)
     if not palm:
         return
 
+    crown = _get_palm_crown_prim(stage, palm_root_path)
+    crown_paths = set()
+    if crown:
+        for prim in Usd.PrimRange(crown):
+            crown_paths.add(prim.GetPath())
+
+    # Use Usd.PrimRange to recursively traverse the updated palm subtree.
     for child in Usd.PrimRange(palm):
+        if child == palm:
+            continue
+
         prim_name = child.GetName().lower()
+        prim_path = child.GetPath()
         
-        # FIX: 1. MAKE LEAVES LIGHTWEIGHT (Applied to the 'leaf_' Xform)
-        if ("leaf_" in prim_name or "leaf_b_" in prim_name) and child.IsA(UsdGeom.Xformable):
+        # 1. MAKE LEAVES LIGHTWEIGHT AND DYNAMIC
+        if crown and prim_path in crown_paths and child.IsA(UsdGeom.Mesh) and (
+            prim_name.startswith("leaf_") or prim_name.startswith("leaf_b_")
+        ):
             if child.HasAPI(UsdPhysics.RigidBodyAPI):
                 rb_api = UsdPhysics.RigidBodyAPI(child)
             else:
                 rb_api = UsdPhysics.RigidBodyAPI.Apply(child)
                 
             kin_attr = rb_api.GetKinematicEnabledAttr()
-            if kin_attr: kin_attr.Set(False) 
-            else: rb_api.CreateKinematicEnabledAttr(False)
+            if kin_attr:
+                kin_attr.Set(False) 
+            else:
+                rb_api.CreateKinematicEnabledAttr(False)
 
             if child.HasAPI(UsdPhysics.MassAPI):
                 mass_api = UsdPhysics.MassAPI(child)
@@ -447,48 +460,63 @@ def disable_palm_physics(stage, palm_root_path):
                 mass_api = UsdPhysics.MassAPI.Apply(child)
             
             mass_attr = mass_api.GetMassAttr()
-            if mass_attr: mass_attr.Set(0.05)
-            else: mass_api.CreateMassAttr(0.05)
-
-        # FIX 2. ENABLE COLLISIONS ON THE MESH (The child of the Leaf)
-        elif child.IsA(UsdGeom.Mesh):
-            parent_name = child.GetParent().GetName().lower()
-            if "leaf_" in parent_name or "leaf_b_" in parent_name:
-                if child.HasAPI(UsdPhysics.CollisionAPI):
-                    col_api = UsdPhysics.CollisionAPI(child)
-                else:
-                    col_api = UsdPhysics.CollisionAPI.Apply(child)
+            if mass_attr:
+                mass_attr.Set(0.05)
+            else:
+                mass_api.CreateMassAttr(0.05)
                 
+            if child.HasAPI(UsdPhysics.CollisionAPI):
+                col_api = UsdPhysics.CollisionAPI(child)
                 col_attr = col_api.GetCollisionEnabledAttr()
-                if col_attr: col_attr.Set(True)
-                else: col_api.CreateCollisionEnabledAttr(True)
+                if col_attr:
+                    col_attr.Set(True)
+                else:
+                    col_api.CreateCollisionEnabledAttr(True)
 
-        # 3. TRUNK IMMOVABLE
+        # 2. KEEP THE TRUNK IMMOVABLE
         elif prim_name in {"trunk", "trunk_top"}:
             if child.HasAPI(UsdPhysics.RigidBodyAPI):
                 rb_api = UsdPhysics.RigidBodyAPI(child)
                 kin_attr = rb_api.GetKinematicEnabledAttr()
-                if kin_attr: kin_attr.Set(True)
-                else: rb_api.CreateKinematicEnabledAttr(True)
+                if kin_attr:
+                    kin_attr.Set(True)
+                else:
+                    rb_api.CreateKinematicEnabledAttr(True)
 
-        # 4. NEUTRALIZE JOINTS
-        elif child.IsA(UsdPhysics.Joint): 
+        # 3. THE FIX: RELIABLY FIND AND NEUTRALIZE JOINTS
+        # Check by actual USD Type instead of relying on the string name
+        if child.IsA(UsdPhysics.Joint): 
+            
+            # if not hasattr(disable_palm_physics, "has_printed"):
+            #     print_joint_properties(child)
+            #     disable_palm_physics.has_printed = True
+
             for prop in child.GetAuthoredProperties():
                 prop_name = prop.GetName().lower()
+                
+                # 1. Kill the spring forces so the leaf doesn't fight back
                 if "stiffness" in prop_name:
                     prop.Set(0.5)
+                    
+                # 2. Grease the hinge (leave a tiny amount of damping so it doesn't vibrate infinitely)
                 elif "damping" in prop_name:
                     prop.Set(0.1)
+                
+                # We completely leave the limits alone! 
+                # 45 degrees of limp bending is more than enough for the arm to pass.
 
 def _iter_leaf_prims(stage, palm_root_path):
     from pxr import Usd, UsdGeom
     palm = stage.GetPrimAtPath(palm_root_path)
     if not palm:
         return
-    # FIX: Traverse everything under the palm to guarantee we find the leaf Xforms
-    for child in Usd.PrimRange(palm):
+    crown = _get_palm_crown_prim(stage, palm_root_path)
+    search_root = crown if crown else palm
+    for child in Usd.PrimRange(search_root):
+        if child == search_root:
+            continue
         name = child.GetName().lower()
-        if ("leaf_" in name or "leaf_b_" in name) and child.IsA(UsdGeom.Xformable):
+        if (name.startswith("leaf_") or name.startswith("leaf_b_")) and UsdGeom.Xformable(child):
             yield child
 
 
@@ -519,30 +547,10 @@ def set_leaf_prims_active(stage, palm_root_path, active=True):
 
 
 def get_crown_centroid(stage, palm_root_path):
-    from pxr import UsdGeom
-    
-    # FIX: 1. Try to use the explicit Crown prim's position first!
-    # Since you separated the crown, its world position is the exact perfect centroid.
-    crown = _get_palm_crown_prim(stage, palm_root_path)
-    if crown and crown.GetName().lower() == "crown" and crown.IsA(UsdGeom.Xformable):
-        try:
-            wp = UsdGeom.Xformable(crown).ComputeLocalToWorldTransform(0).ExtractTranslation()
-            # Only trust it if it actually has a Z height (wasn't left at 0,0,0 in Blender)
-            if wp[2] > 0.5:
-                return np.array([wp[0], wp[1], wp[2]], dtype=np.float64)
-        except Exception:
-            pass
-
-    # FIX 2. Fallback: Average the leaves, but filter out any broken (0,0,0) origins
     leaves = _leaf_world_positions(stage, palm_root_path)
     if not leaves:
         return np.array([0.0, 0.0, 5.0])
-        
-    valid_positions = [p for _, p in leaves if p[2] > 0.1]
-    if not valid_positions:
-        return np.array([0.0, 0.0, 5.0])
-        
-    positions = np.stack(valid_positions, axis=0)
+    positions = np.stack([p for _, p in leaves], axis=0)
     return positions.mean(axis=0)
 
 
