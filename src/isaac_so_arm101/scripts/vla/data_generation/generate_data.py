@@ -165,7 +165,7 @@ LEAF_KEEP_RATIO_MAX = 0.8
 HOVER_OFFSET = np.array([0.0, 0.0, 0.35])  # back to original reachable height
 # Meters to pull the hover target from the crown XY back toward the robot XY.
 # 0.0 = directly above crown (used to overshoot past). Increase to land short of crown.
-HOVER_PULLBACK_M = 0.15
+HOVER_PULLBACK_M = 0.0
 
 # ─── Dataset metadata ─────────────────────────────────────────────────────
 TASK_DESCRIPTION = "Move end effector above palm crown, angle end effector downward, and hold while end effector is spraying."
@@ -204,7 +204,7 @@ CAMERA_TARGET_LIFT = 0.20
 ANGLE_RANDOM_RANGE = float(np.deg2rad(45.0))  # ±45° forward arc.
 # Positive value moves the robot closer to the tree (subtracted from the
 # default radius). NEGATIVE pushes it further away. 0.0 keeps default.
-TREE_INWARD_OFFSET = 0.20  # positive = pull robot CLOSER to tree (reachable distance)
+TREE_INWARD_OFFSET = 0.50  # positive = pull robot CLOSER to tree (reachable distance)
 # Lower bound on the radius — never go closer than this to the trunk.
 MIN_TREE_RADIUS = 0.08
 # Reject any placement whose XY position lands within this many meters of
@@ -644,14 +644,11 @@ def cull_episode_leaves(stage, palm_root_paths, episode_rng, cull_prob, env_ids=
             )
 
 
-def prepare_episode_targets(stage, palm_root_paths, episode_rng, cull_prob,
-                             robot_xys=None, env_ids=None):
-    """Compute hover targets per env. If ``robot_xys`` is given, the target is
-    pulled HOVER_PULLBACK_M meters along the crown→robot XY direction so the
-    EE lands short of the trunk instead of past it.
+def prepare_episode_targets(stage, palm_root_paths, robot_xys=None, env_ids=None):
+    """Compute hover targets per env based on crown centroid + HOVER_OFFSET.
     
-    NOTE: Call cull_episode_leaves() BEFORE this function so that targets are
-    based on the final (post-cull) leaf geometry.
+    If robot_xys is provided, targets can be pulled toward the robot (HOVER_PULLBACK_M).
+    Assumes cull_episode_leaves() was already called.
     """
     if env_ids is None:
         env_ids = list(range(len(palm_root_paths)))
@@ -1107,8 +1104,6 @@ def main():
     current_hover_targets[:] = prepare_episode_targets(
         stage=stage,
         palm_root_paths=palm_root_paths,
-        episode_rng=episode_rng,
-        cull_prob=args_cli.top_leaf_cull_prob,
         robot_xys=robot_xys_now,
     )
 
@@ -1358,8 +1353,6 @@ def main():
             refreshed_targets = prepare_episode_targets(
                 stage=stage,
                 palm_root_paths=palm_root_paths,
-                episode_rng=episode_rng,
-                cull_prob=args_cli.top_leaf_cull_prob,
                 robot_xys=robot_xys_now,
                 env_ids=reset_env_ids,
             )
