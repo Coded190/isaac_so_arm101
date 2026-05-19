@@ -204,7 +204,7 @@ CAMERA_TARGET_LIFT = 0.20
 ANGLE_RANDOM_RANGE = float(np.deg2rad(45.0))  # ±45° forward arc.
 # Positive value moves the robot closer to the tree (subtracted from the
 # default radius). NEGATIVE pushes it further away. 0.0 keeps default.
-TREE_INWARD_OFFSET = -0.10  # negative = push robot FURTHER from tree (10cm extra distance)
+TREE_INWARD_OFFSET = 0.20  # positive = pull robot CLOSER to tree (reachable distance)
 # Lower bound on the radius — never go closer than this to the trunk.
 MIN_TREE_RADIUS = 0.08
 # Reject any placement whose XY position lands within this many meters of
@@ -310,21 +310,31 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
     are properly filled and visible. Includes a single global shadowless ambient 
     fill floor to prevent USD instancing breaks (which causes scaled assets to enlarge).
     """
+    # Verify the HDRI folder exists and has files
+    if not os.path.exists(hdri_folder_path):
+        print(f"[WARNING] HDRI folder not found: {hdri_folder_path}", flush=True)
+        return
+    
     # Get a list of all HDR/EXR files in your folder
     valid_exts = (".hdr", ".exr")
     hdri_files = [f for f in os.listdir(hdri_folder_path) if f.endswith(valid_exts)]
     if not hdri_files:
-        print("[WARNING] No HDRIs found in the folder.")
+        print(f"[WARNING] No HDRI files (.hdr/.exr) found in {hdri_folder_path}", flush=True)
         return
 
     chosen_hdri = random.choice(hdri_files)
     full_path = os.path.join(hdri_folder_path, chosen_hdri)
     
+    # Verify the chosen HDRI file exists
+    if not os.path.exists(full_path):
+        print(f"[WARNING] HDRI file not found: {full_path}", flush=True)
+        return
+    
     # 1. Base intensity for a rich, vibrant background sky texture
     target_intensity = random.uniform(600.0, 1200.0)
     
     if DEBUG_VERBOSE:
-        print(f"[randomize_lighting] chosen_hdri={chosen_hdri}", flush=True)
+        print(f"[randomize_lighting] chosen_hdri={chosen_hdri} full_path={full_path}", flush=True)
 
     if env_ids is None:
         env_ids = []
@@ -340,12 +350,15 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
     # Collect all valid environment lights first to get an accurate count
     valid_env_lights = []
     for env_id in env_ids:
-        prim = stage.GetPrimAtPath(f"/World/envs/env_{env_id}/Scene/DomeLight")
+        light_path = f"/World/envs/env_{env_id}/Scene/DomeLight"
+        prim = stage.GetPrimAtPath(light_path)
         if prim and prim.IsA(UsdLux.DomeLight):
             valid_env_lights.append((env_id, prim))
+        elif DEBUG_VERBOSE:
+            print(f"[WARNING] DomeLight not found at {light_path}", flush=True)
 
     if not valid_env_lights:
-        print("[WARNING] No env-local DomeLight prims were found to update.")
+        print("[WARNING] No env-local DomeLight prims were found to update.", flush=True)
         return
 
     # 2. Calculate base fraction per environment
@@ -1329,6 +1342,14 @@ def main():
                       f"({', '.join(reasons)})", flush=True)
 
             randomize_lighting(stage, HDRI_FOLDER_PATH, env_ids=range(num_envs))
+            # Cull leaves BEFORE repositioning robot so placement is based on final geometry
+            cull_episode_leaves(
+                stage=stage,
+                palm_root_paths=palm_root_paths,
+                episode_rng=episode_rng,
+                cull_prob=args_cli.top_leaf_cull_prob,
+                env_ids=reset_env_ids,
+            )
             randomize_robot_root_pose(
                 env=env, stage=stage, palm_root_paths=palm_root_paths,
                 episode_rng=episode_rng, env_ids=reset_env_ids,
