@@ -206,8 +206,8 @@ ANGLE_RANDOM_RANGE = float(np.deg2rad(45.0))  # ±45° forward arc.
 # default radius). NEGATIVE pushes it further away. 0.0 keeps default.
 TREE_INWARD_OFFSET = 0.50  # positive = pull robot CLOSER to tree (reachable distance)
 # Clamp the final spawn radius to this range (meters)
-MIN_TREE_RADIUS = 0.50  # Don't spawn too close (arm can reach better from distance)
-MAX_TREE_RADIUS = 2.00  # Don't spawn too far (arm needs reasonable reach)
+MIN_TREE_RADIUS = 0.30  # Don't spawn too close (arm can reach better from distance)
+MAX_TREE_RADIUS = 0.60  # Don't spawn too far (arm needs reasonable reach)
 # Reject any placement whose XY position lands within this many meters of
 # any palm leaf — the base would otherwise spawn inside / through a leaf.
 LEAF_CLEARANCE = 0.10
