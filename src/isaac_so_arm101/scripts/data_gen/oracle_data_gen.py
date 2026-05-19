@@ -49,7 +49,17 @@ GRIPPER_OPEN = 0.0       # "Spray on" joint position
 GRIPPER_CLOSED = 0.0     # "Spray off" joint position (leave equal if gripper is unused)
 
 # Path to the palm under which all leaf/trunk prims live.
-PALM_ROOT_PATH = "/World/envs/env_0/Scene/Palm"
+PALM_ROOT_PATH = "/World/envs/env_0/Scene/palm_tree_crown"
+
+
+def _get_palm_crown_prim(stage):
+    palm = stage.GetPrimAtPath(PALM_ROOT_PATH)
+    if not palm or not palm.IsValid():
+        return None
+    crown = palm.GetChild("crown")
+    if crown and crown.IsValid():
+        return crown
+    return palm
 
 # Crunched rest configuration the arm snaps to at startup and after every reset.
 # Joint order matches robot.data.joint_names for the SO-ARM101:
@@ -75,13 +85,15 @@ TARGET_OFFSET = np.array([0.0, 0.0, 0.20])
 
 def _iter_leaf_prims(stage):
     """Yield every leaf_* and leaf_b_* prim under the palm root."""
-    from pxr import UsdGeom
-    palm = stage.GetPrimAtPath(PALM_ROOT_PATH)
-    if not palm:
+    from pxr import Usd, UsdGeom
+    crown = _get_palm_crown_prim(stage)
+    if not crown:
         return
-    for child in palm.GetChildren():
-        name = child.GetName()
-        if name.startswith("leaf_") and UsdGeom.Xformable(child):
+    for child in Usd.PrimRange(crown):
+        if child == crown:
+            continue
+        name = child.GetName().lower()
+        if (name.startswith("leaf_") or name.startswith("leaf_b_")) and UsdGeom.Xformable(child):
             yield child
 
 

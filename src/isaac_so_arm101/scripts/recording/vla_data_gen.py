@@ -166,7 +166,17 @@ PLACEMENT_MAX_ATTEMPTS = 15
 
 
 def get_palm_root_path(env_id):
-    return f"/World/envs/env_{env_id}/Scene/Palm"
+    return f"/World/envs/env_{env_id}/Scene/palm_tree_crown"
+
+
+def _get_palm_crown_prim(stage, palm_root_path):
+    palm = stage.GetPrimAtPath(palm_root_path)
+    if not palm or not palm.IsValid():
+        return None
+    crown = palm.GetChild("crown")
+    if crown and crown.IsValid():
+        return crown
+    return palm
 
 
 def disable_palm_physics(stage, palm_root_path):
@@ -176,13 +186,33 @@ def disable_palm_physics(stage, palm_root_path):
     for clean recording captures.
     """
     try:
-        from pxr import Usd
+        from pxr import Usd, UsdGeom
     except Exception:
         return
     palm = stage.GetPrimAtPath(palm_root_path)
     if not palm:
         return
+    crown = _get_palm_crown_prim(stage, palm_root_path)
+    crown_paths = set()
+    if crown:
+        for prim in Usd.PrimRange(crown):
+            crown_paths.add(prim.GetPath())
+
     for prim in Usd.PrimRange(palm):
+        if prim == palm:
+            continue
+        prim_name = prim.GetName().lower()
+        if crown and prim.GetPath() in crown_paths and prim.IsA(UsdGeom.Mesh) and (
+            prim_name.startswith("leaf_") or prim_name.startswith("leaf_b_")
+        ):
+            col_attr = prim.GetAttribute("physics:collisionEnabled")
+            if col_attr:
+                col_attr.Set(False)
+            rb_attr = prim.GetAttribute("physics:rigidBodyEnabled")
+            if rb_attr:
+                rb_attr.Set(False)
+            continue
+
         col_attr = prim.GetAttribute("physics:collisionEnabled")
         if col_attr:
             col_attr.Set(False)
@@ -193,18 +223,24 @@ def disable_palm_physics(stage, palm_root_path):
         # the trunk — without live rigid bodies on each end, PhysX
         # otherwise fills the log with "cannot create a joint between
         # static bodies" errors. Cosmetic; behavior is unchanged.
+        if prim.GetName().lower() in {"trunk", "trunk_top"}:
+            continue
         if "Joint" in prim.GetName():
             prim.SetActive(False)
 
 
 def _iter_leaf_prims(stage, palm_root_path):
-    from pxr import UsdGeom
+    from pxr import Usd, UsdGeom
     palm = stage.GetPrimAtPath(palm_root_path)
     if not palm:
         return
-    for child in palm.GetChildren():
-        name = child.GetName()
-        if name.startswith("leaf_") and UsdGeom.Xformable(child):
+    crown = _get_palm_crown_prim(stage, palm_root_path)
+    search_root = crown if crown else palm
+    for child in Usd.PrimRange(search_root):
+        if child == search_root:
+            continue
+        name = child.GetName().lower()
+        if (name.startswith("leaf_") or name.startswith("leaf_b_")) and UsdGeom.Xformable(child):
             yield child
 
 
@@ -230,14 +266,13 @@ def set_leaf_prims_active(stage, palm_root_path, active=True):
     tree to get progressively balder across episodes.
     """
     from pxr import UsdGeom
-    palm = stage.GetPrimAtPath(palm_root_path)
-    if not palm:
-        return
-    if active:
-        for child in palm.GetAllChildren():
-            name = child.GetName()
-            if name.startswith("leaf_") and UsdGeom.Xformable(child):
-                child.SetActive(True)
+    for child in _iter_leaf_prims(stage, palm_root_path):
+        if not UsdGeom.Xformable(child):
+            continue
+        if active:
+            child.SetActive(True)
+        else:
+            child.SetActive(False)
     else:
         for prim in _iter_leaf_prims(stage, palm_root_path):
             prim.SetActive(False)

@@ -211,10 +211,21 @@ MIN_TREE_RADIUS = 0.08
 # any palm leaf — the base would otherwise spawn inside / through a leaf.
 LEAF_CLEARANCE = 0.10
 PLACEMENT_MAX_ATTEMPTS = 15
+PALM_ROOT_NAME = "palm_tree_crown"
 
 
 def get_palm_root_path(env_id):
-    return f"/World/envs/env_{env_id}/Scene/Palm"
+    return f"/World/envs/env_{env_id}/Scene/{PALM_ROOT_NAME}"
+
+
+def _get_palm_crown_prim(stage, palm_root_path):
+    palm = stage.GetPrimAtPath(palm_root_path)
+    if not palm or not palm.IsValid():
+        return None
+    crown = palm.GetChild("crown")
+    if crown and crown.IsValid():
+        return crown
+    return palm
 
 def print_joint_properties(joint_prim):
     """Prints all authored properties of a USD Joint to the console."""
@@ -408,18 +419,30 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
 
 def disable_palm_physics(stage, palm_root_path):
     """Updates palm tree leaves to be lightweight, and completely loosens their joints."""
-    from pxr import Usd, UsdPhysics
+    from pxr import Usd, UsdGeom, UsdPhysics
     
     palm = stage.GetPrimAtPath(palm_root_path)
     if not palm:
         return
 
-    # Use Usd.PrimRange to recursively traverse ALL descendants in the tree
+    crown = _get_palm_crown_prim(stage, palm_root_path)
+    crown_paths = set()
+    if crown:
+        for prim in Usd.PrimRange(crown):
+            crown_paths.add(prim.GetPath())
+
+    # Use Usd.PrimRange to recursively traverse the updated palm subtree.
     for child in Usd.PrimRange(palm):
-        prim_name = child.GetName()
+        if child == palm:
+            continue
+
+        prim_name = child.GetName().lower()
+        prim_path = child.GetPath()
         
         # 1. MAKE LEAVES LIGHTWEIGHT AND DYNAMIC
-        if prim_name.startswith("leaf_"):
+        if crown and prim_path in crown_paths and child.IsA(UsdGeom.Mesh) and (
+            prim_name.startswith("leaf_") or prim_name.startswith("leaf_b_")
+        ):
             if child.HasAPI(UsdPhysics.RigidBodyAPI):
                 rb_api = UsdPhysics.RigidBodyAPI(child)
             else:
@@ -451,7 +474,7 @@ def disable_palm_physics(stage, palm_root_path):
                     col_api.CreateCollisionEnabledAttr(True)
 
         # 2. KEEP THE TRUNK IMMOVABLE
-        elif prim_name.startswith("Trunk"):
+        elif prim_name in {"trunk", "trunk_top"}:
             if child.HasAPI(UsdPhysics.RigidBodyAPI):
                 rb_api = UsdPhysics.RigidBodyAPI(child)
                 kin_attr = rb_api.GetKinematicEnabledAttr()
@@ -483,13 +506,17 @@ def disable_palm_physics(stage, palm_root_path):
                 # 45 degrees of limp bending is more than enough for the arm to pass.
 
 def _iter_leaf_prims(stage, palm_root_path):
-    from pxr import UsdGeom
+    from pxr import Usd, UsdGeom
     palm = stage.GetPrimAtPath(palm_root_path)
     if not palm:
         return
-    for child in palm.GetChildren():
-        name = child.GetName()
-        if name.startswith("leaf_") and UsdGeom.Xformable(child):
+    crown = _get_palm_crown_prim(stage, palm_root_path)
+    search_root = crown if crown else palm
+    for child in Usd.PrimRange(search_root):
+        if child == search_root:
+            continue
+        name = child.GetName().lower()
+        if (name.startswith("leaf_") or name.startswith("leaf_b_")) and UsdGeom.Xformable(child):
             yield child
 
 
@@ -509,13 +536,8 @@ def _leaf_world_positions(stage, palm_root_path):
 def set_leaf_prims_active(stage, palm_root_path, active=True):
     """Activate or deactivate every leaf under palm_root_path using Visibility."""
     from pxr import UsdGeom
-    palm = stage.GetPrimAtPath(palm_root_path)
-    if not palm:
-        return
-        
-    for child in palm.GetAllChildren():
-        name = child.GetName()
-        if name.startswith("leaf_") and UsdGeom.Xformable(child):
+    for child in _iter_leaf_prims(stage, palm_root_path):
+        if UsdGeom.Xformable(child):
             # Use Imageable to toggle visibility safely without breaking PhysX
             imageable = UsdGeom.Imageable(child)
             if active:
