@@ -222,8 +222,12 @@ def _get_palm_crown_prim(stage, palm_root_path):
     palm = stage.GetPrimAtPath(palm_root_path)
     if not palm or not palm.IsValid():
         return None
+    # Navigate: palm_tree_crown -> crown -> trunk_top
     crown = palm.GetChild("crown")
     if crown and crown.IsValid():
+        trunk_top = crown.GetChild("trunk_top")
+        if trunk_top and trunk_top.IsValid():
+            return trunk_top
         return crown
     return palm
 
@@ -560,6 +564,29 @@ def set_leaf_prims_active(stage, palm_root_path, active=True):
 
 
 def get_crown_centroid(stage, palm_root_path):
+    """Get the world position of the palm crown (trunk_top prim).
+    
+    Navigates the hierarchy: palm_tree_crown -> crown -> trunk_top
+    Falls back to leaf averaging if trunk_top doesn't exist.
+    """
+    from pxr import UsdGeom
+    
+    # Navigate the prim hierarchy to find trunk_top
+    palm = stage.GetPrimAtPath(palm_root_path)
+    if palm and palm.IsValid():
+        crown = palm.GetChild("crown")
+        if crown and crown.IsValid():
+            trunk_top = crown.GetChild("trunk_top")
+            if trunk_top and trunk_top.IsValid():
+                xf = UsdGeom.Xformable(trunk_top)
+                try:
+                    wp = xf.ComputeLocalToWorldTransform(0).ExtractTranslation()
+                    pos = np.array([float(wp[0]), float(wp[1]), float(wp[2])], dtype=np.float64)
+                    return pos
+                except Exception as e:
+                    print(f"[WARNING] Failed to get trunk_top world position: {e}", flush=True)
+    
+    # Fallback: average leaf positions if trunk_top unavailable
     leaves = _leaf_world_positions(stage, palm_root_path)
     if not leaves:
         return np.array([0.0, 0.0, 5.0])
@@ -1074,8 +1101,32 @@ def main():
     num_envs = env.unwrapped.num_envs
 
     import omni.usd
+    from pxr import UsdGeom
     stage = omni.usd.get_context().get_stage()
     palm_root_paths = [get_palm_root_path(env_id) for env_id in range(num_envs)]
+    
+    # Get the crown centroid position for the first env to initialize robot nearby
+    if palm_root_paths:
+        crown_pos = get_crown_centroid(stage, palm_root_paths[0])
+        print(f"[init] palm_tree_crown centroid at: {crown_pos}", flush=True)
+        
+        # Pre-position the robot near the crown before randomize_robot_root_pose()
+        # This ensures the radius0 calculation starts from a sensible distance
+        robot = env.unwrapped.scene["robot"]
+        new_root = robot.data.default_root_state.clone()
+        
+        # Place robot at a default distance ~1.5m away from crown XY, at crown's Z height
+        for i in range(num_envs):
+            crown = get_crown_centroid(stage, palm_root_paths[i])
+            # Start at crown + 1.5m in the +X direction (arbitrary angle)
+            new_root[i, 0] = float(crown[0]) + 1.5
+            new_root[i, 1] = float(crown[1])
+            new_root[i, 2] = float(crown[2])
+            # Quaternion stays at default (identity)
+        
+        robot.write_root_pose_to_sim(new_root[:, :7], env_ids=None)
+        print(f"[init] pre-positioned robot at crown +1.5m", flush=True)
+    
     for palm_path in palm_root_paths:
         disable_palm_physics(stage, palm_path)
     episode_rng = np.random.default_rng(getattr(args_cli, "seed", None))
