@@ -222,12 +222,8 @@ def _get_palm_crown_prim(stage, palm_root_path):
     palm = stage.GetPrimAtPath(palm_root_path)
     if not palm or not palm.IsValid():
         return None
-    # Navigate: palm_tree_crown -> crown -> trunk_top
     crown = palm.GetChild("crown")
     if crown and crown.IsValid():
-        trunk_top = crown.GetChild("trunk_top")
-        if trunk_top and trunk_top.IsValid():
-            return trunk_top
         return crown
     return palm
 
@@ -564,29 +560,7 @@ def set_leaf_prims_active(stage, palm_root_path, active=True):
 
 
 def get_crown_centroid(stage, palm_root_path):
-    """Get the world position of the palm crown (trunk_top prim).
-    
-    Navigates the hierarchy: palm_tree_crown -> crown -> trunk_top
-    Falls back to leaf averaging if trunk_top doesn't exist.
-    """
-    from pxr import UsdGeom
-    
-    # Navigate the prim hierarchy to find trunk_top
-    palm = stage.GetPrimAtPath(palm_root_path)
-    if palm and palm.IsValid():
-        crown = palm.GetChild("crown")
-        if crown and crown.IsValid():
-            trunk_top = crown.GetChild("trunk_top")
-            if trunk_top and trunk_top.IsValid():
-                xf = UsdGeom.Xformable(trunk_top)
-                try:
-                    wp = xf.ComputeLocalToWorldTransform(0).ExtractTranslation()
-                    pos = np.array([float(wp[0]), float(wp[1]), float(wp[2])], dtype=np.float64)
-                    return pos
-                except Exception as e:
-                    print(f"[WARNING] Failed to get trunk_top world position: {e}", flush=True)
-    
-    # Fallback: average leaf positions if trunk_top unavailable
+    """Get the mean world position of all active leaves (the crown centroid)."""
     leaves = _leaf_world_positions(stage, palm_root_path)
     if not leaves:
         return np.array([0.0, 0.0, 5.0])
@@ -693,6 +667,9 @@ def prepare_episode_targets(stage, palm_root_paths, robot_xys=None, env_ids=None
                 back /= n
                 target[0] += float(back[0]) * HOVER_PULLBACK_M
                 target[1] += float(back[1]) * HOVER_PULLBACK_M
+        if DEBUG_VERBOSE:
+            robot_xy = robot_xys[env_id] if robot_xys is not None else None
+            print(f"[prepare_targets env {env_id}] leaf_mean={crown_centroid} target={target} robot_xy={robot_xy}", flush=True)
         targets.append(target)
     return np.asarray(targets, dtype=np.float32)
 
@@ -1233,12 +1210,25 @@ def main():
     step_counter = 0
     state_names = {0: "approach_wp", 1: "approach_hover", 2: "settle",
                    3: "spray", 4: "success_hold", 5: "fail_hold"}
+    first_step = True
     
     while simulation_app.is_running():
         robot_data = env.unwrapped.scene["robot"].data
         ee_pos_all = robot_data.body_pos_w[:, moving_gripper_idx].cpu().numpy()
         ee_quat_all = robot_data.body_quat_w[:, moving_gripper_idx].cpu().numpy()
         root_quat_all = robot_data.root_quat_w.cpu().numpy()
+        
+        # Debug: Print positions on first step
+        if first_step and DEBUG_VERBOSE:
+            robot_base_all = robot_data.root_pos_w.cpu().numpy()
+            for env_id in range(num_envs):
+                ee_pos = ee_pos_all[env_id]
+                target_pos = current_hover_targets[env_id]
+                base_pos = robot_base_all[env_id]
+                dist_to_target = float(np.linalg.norm(ee_pos - target_pos))
+                print(f"[first_step env {env_id}] ee={ee_pos} target={target_pos} "
+                      f"dist={dist_to_target:.3f}m base={base_pos}", flush=True)
+            first_step = False
 
         action_batch = np.zeros((num_envs, 7), dtype=np.float32)
         for env_id in range(num_envs):
