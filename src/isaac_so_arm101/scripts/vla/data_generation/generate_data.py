@@ -427,6 +427,11 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
     for env_id, prim in valid_env_lights:
         light = UsdLux.DomeLight(prim)
         
+        # CRITICAL: Make sure the DomeLight prim itself is VISIBLE
+        from pxr import UsdGeom
+        imageable = UsdGeom.Imageable(prim)
+        imageable.MakeVisible()
+        
         # Pass the HDRI texture path
         light.GetTextureFileAttr().Set(full_path)
         
@@ -459,6 +464,18 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
             exposure_attr.Set(0.0)
         else:
             light.CreateExposureAttr(0.0)
+        
+        # Set colorSpace to sRGB so HDRI colors are interpreted correctly
+        try:
+            colorspace_attr = prim.GetAttribute("inputs:texture:colorSpace")
+            if not colorspace_attr:
+                colorspace_attr = prim.CreateAttribute("inputs:texture:colorSpace", Sdf.ValueTypeNames.String)
+            colorspace_attr.Set("sRGB")
+        except Exception:
+            pass
+        
+        if DEBUG_VERBOSE:
+            print(f"[dome-light] env {env_id}: texture={full_path} intensity={target_intensity} visible=True", flush=True)
 
     # --- FIX: ONE GLOBAL AMBIENT SAFETY NET FLOOR ---
     # Creates ONE shadowless light outside of the clones to preserve instancing.
