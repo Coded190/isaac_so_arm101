@@ -420,9 +420,6 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
     diffuse_boost = 10.0 
     diffuse_value = fractional_multiplier * diffuse_boost
 
-    if DEBUG_VERBOSE:
-        print(f"[dome-light] Intensity: {target_intensity} | Diffuse Val: {diffuse_value:.4f} | Specular Val: {specular_value:.4f}", flush=True)
-
     for env_id, prim in valid_env_lights:
         light = UsdLux.DomeLight(prim)
         
@@ -482,21 +479,6 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
         except Exception:
             pass
         
-        if DEBUG_VERBOSE:
-            print(f"[dome-light] env {env_id}: texture={full_path} intensity={target_intensity} visible=True", flush=True)
-            # Dump all authored properties to debug what's actually on the prim
-            try:
-                authored = list(prim.GetAuthoredProperties())
-                print(f"[dome-light-debug] env {env_id} authored properties count: {len(authored)}", flush=True)
-                for prop in authored:
-                    try:
-                        val = prop.Get()
-                        print(f"[dome-light-debug]   {prop.GetName()} = {val}", flush=True)
-                    except Exception:
-                        pass
-            except Exception as e:
-                print(f"[dome-light-debug] Error dumping properties: {e}", flush=True)
-
     # --- FIX: ONE GLOBAL AMBIENT SAFETY NET FLOOR ---
     # Creates ONE shadowless light outside of the clones to preserve instancing.
     global_ambient_path = "/World/GlobalAmbientFill"
@@ -516,15 +498,6 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
     if not shadow_attr:
         shadow_attr = ambient_light.GetPrim().CreateAttribute("inputs:shadow:enable", Sdf.ValueTypeNames.Bool)
     shadow_attr.Set(False)
-
-
-def list_all_prims(stage, path="/World/Scene"):
-    """Debug: List all prims in a path to find hidden elements."""
-    prim = stage.GetPrimAtPath(path)
-    for p in Usd.PrimRange(prim):
-        visibility = UsdGeom.Imageable(p).GetVisibilityAttr()
-        vis_val = visibility.Get() if visibility else "none"
-        print(f"  {p.GetPath()} | type={p.GetTypeName()} | visibility={vis_val}", flush=True)
 
 
 def disable_palm_physics(stage, palm_root_path):
@@ -1190,12 +1163,9 @@ def main():
     
     palm_root_paths = [get_palm_root_path(env_id) for env_id in range(num_envs)]
     
-    list_all_prims(stage, "/World")
-    
     # Get the crown centroid position for the first env to initialize robot nearby
     if palm_root_paths:
         crown_pos = get_crown_centroid(stage, palm_root_paths[0])
-        print(f"[init] palm_tree_crown centroid at: {crown_pos}", flush=True)
         
         # Pre-position the robot near the crown before randomize_robot_root_pose()
         # This ensures the radius0 calculation starts from a sensible distance
@@ -1212,7 +1182,6 @@ def main():
             # Quaternion stays at default (identity)
         
         robot.write_root_pose_to_sim(new_root[:, :7], env_ids=None)
-        print(f"[init] pre-positioned robot at crown +1.5m", flush=True)
     
     for palm_path in palm_root_paths:
         disable_palm_physics(stage, palm_path)
