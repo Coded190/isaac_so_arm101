@@ -501,6 +501,7 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
 
     # --- FIX: ONE GLOBAL AMBIENT SAFETY NET FLOOR ---
     # Creates ONE shadowless light outside of the clones to preserve instancing.
+    # Keep intensity LOW so the DomeLight HDRI dominates the scene lighting.
     global_ambient_path = "/World/GlobalAmbientFill"
     ambient_prim = stage.GetPrimAtPath(global_ambient_path)
     if not ambient_prim:
@@ -508,9 +509,9 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
     else:
         ambient_light = UsdLux.DistantLight(ambient_prim)
         
-    # Set the baseline brightness. Since this is one global light (not multiplied 
-    # by env count), we set the raw total intensity here. 
-    ambient_light.GetIntensityAttr().Set(500.0)
+    # Reduced from 500 to 30 so the DomeLight HDRI is the primary light source.
+    # The GlobalAmbientFill just provides a subtle fill in shadows.
+    ambient_light.GetIntensityAttr().Set(30.0)
     ambient_light.GetColorAttr().Set(Gf.Vec3f(1.0, 1.0, 1.0))
     
     # Explicitly turn off shadows for this baseline fill light
@@ -518,6 +519,9 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
     if not shadow_attr:
         shadow_attr = ambient_light.GetPrim().CreateAttribute("inputs:shadow:enable", Sdf.ValueTypeNames.Bool)
     shadow_attr.Set(False)
+    
+    if DEBUG_VERBOSE:
+        print(f"[dome-light] GlobalAmbientFill reduced to 30 intensity to let HDRI dominate", flush=True)
 
 
 def disable_palm_physics(stage, palm_root_path):
