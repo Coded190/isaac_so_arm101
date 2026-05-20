@@ -668,18 +668,38 @@ def spawn_target_markers(stage, target_positions, env_ids=None, marker_type="spr
         spawn_target_marker(stage, target_positions[env_id], marker_path=marker_path, color=color)
 
 
-def set_rest_pose(env, rest_pose_tensor, env_ids=None):
+def set_rest_pose(env, rest_pose_tensor, env_ids=None, noise_scale=0.05):
+    """
+    Sets the arm to its rest pose with slight random variations (jitter) 
+    applied to the joints to improve VLA model robustness.
+    
+    noise_scale: maximum offset in radians (0.05 is roughly ±2.8 degrees)
+    """
     robot = env.unwrapped.scene["robot"]
+    
+    # 1. Expand the rest_pose_tensor depending on how many envs we are resetting
     if env_ids is None:
-        joint_pos = rest_pose_tensor.expand(env.unwrapped.num_envs, -1)
-        zero_vel = torch.zeros_like(joint_pos)
-        robot.write_joint_state_to_sim(joint_pos, zero_vel)
-        return
-    env_ids_t = torch.as_tensor(env_ids, device=rest_pose_tensor.device, dtype=torch.long)
-    joint_pos = rest_pose_tensor.expand(env_ids_t.shape[0], -1)
-    zero_vel = torch.zeros_like(joint_pos)
-    robot.write_joint_state_to_sim(joint_pos, zero_vel, env_ids=env_ids_t)
+        num_envs = env.unwrapped.num_envs
+        joint_pos = rest_pose_tensor.expand(num_envs, -1).clone()
+        env_ids_t = None
+    else:
+        env_ids_t = torch.as_tensor(env_ids, device=rest_pose_tensor.device, dtype=torch.long)
+        num_envs = env_ids_t.shape[0]
+        joint_pos = rest_pose_tensor.expand(num_envs, -1).clone()
 
+    # 2. Generate random uniform noise in the range [-noise_scale, noise_scale]
+    # We only generate noise for the first 5 joints (base, shoulder, elbow, wrist pitch, wrist roll)
+    noise = (torch.rand(num_envs, 5, device=joint_pos.device) * 2.0 - 1.0) * noise_scale
+    
+    # 3. Add the jitter to the arm joints, leaving the gripper (index 5) untouched
+    joint_pos[:, :5] += noise
+
+    # 4. Write the perturbed positions and zero velocities to the sim
+    zero_vel = torch.zeros_like(joint_pos)
+    if env_ids is None:
+        robot.write_joint_state_to_sim(joint_pos, zero_vel)
+    else:
+        robot.write_joint_state_to_sim(joint_pos, zero_vel, env_ids=env_ids_t)
 
 def get_deterministic_target(stage, palm_root_path, offset=HOVER_OFFSET):
     return get_crown_centroid(stage, palm_root_path) + offset
