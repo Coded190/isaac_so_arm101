@@ -432,6 +432,16 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
         imageable = UsdGeom.Imageable(prim)
         imageable.MakeVisible()
         
+        # Also explicitly set the visibility attribute at the prim level
+        try:
+            vis_attr = prim.GetAttribute("visibility")
+            if not vis_attr:
+                vis_attr = prim.CreateAttribute("visibility", Sdf.ValueTypeNames.Token)
+            vis_attr.Set("inherited")
+        except Exception as e:
+            if DEBUG_VERBOSE:
+                print(f"[dome-light] Warning setting visibility: {e}", flush=True)
+        
         # Pass the HDRI texture path
         light.GetTextureFileAttr().Set(full_path)
         
@@ -476,6 +486,18 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
         
         if DEBUG_VERBOSE:
             print(f"[dome-light] env {env_id}: texture={full_path} intensity={target_intensity} visible=True", flush=True)
+            # Dump all authored properties to debug what's actually on the prim
+            try:
+                authored = list(prim.GetAuthoredProperties())
+                print(f"[dome-light-debug] env {env_id} authored properties count: {len(authored)}", flush=True)
+                for prop in authored:
+                    try:
+                        val = prop.Get()
+                        print(f"[dome-light-debug]   {prop.GetName()} = {val}", flush=True)
+                    except Exception:
+                        pass
+            except Exception as e:
+                print(f"[dome-light-debug] Error dumping properties: {e}", flush=True)
 
     # --- FIX: ONE GLOBAL AMBIENT SAFETY NET FLOOR ---
     # Creates ONE shadowless light outside of the clones to preserve instancing.
