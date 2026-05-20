@@ -128,6 +128,7 @@ except ImportError:
 
 import isaac_so_arm101.tasks
 from isaaclab_tasks.utils import parse_env_cfg
+from pxr import Usd, UsdGeom, UsdPhysics, UsdLux, UsdShade, Sdf, Gf
 
 
 # ─── Kinematic / FSM constants ────────────────────────────────────────────
@@ -244,7 +245,6 @@ def print_joint_properties(joint_prim):
             print(f"     {name}: {val}")
     print("---------------------------------------------------\n")
 
-from pxr import UsdLux, Sdf, Gf
 import random
 
 
@@ -310,7 +310,6 @@ def _resolve_material_texture_paths(stage, prim_path):
     that don't resolve from the Isaac Sim USD root. We rewrite them to absolute paths
     based on the USD stage's root resolver context.
     """
-    from pxr import Usd, UsdShade, Sdf
     
     prim = stage.GetPrimAtPath(prim_path)
     if not prim.IsValid():
@@ -428,7 +427,6 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
         light = UsdLux.DomeLight(prim)
         
         # CRITICAL: Make sure the DomeLight prim itself is VISIBLE
-        from pxr import UsdGeom
         imageable = UsdGeom.Imageable(prim)
         imageable.MakeVisible()
         
@@ -520,9 +518,17 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
     shadow_attr.Set(False)
 
 
+def list_all_prims(stage, path="/World/Scene"):
+    """Debug: List all prims in a path to find hidden elements."""
+    prim = stage.GetPrimAtPath(path)
+    for p in Usd.PrimRange(prim):
+        visibility = UsdGeom.Imageable(p).GetVisibilityAttr()
+        vis_val = visibility.Get() if visibility else "none"
+        print(f"  {p.GetPath()} | type={p.GetTypeName()} | visibility={vis_val}", flush=True)
+
+
 def disable_palm_physics(stage, palm_root_path):
     """Updates palm tree leaves to be lightweight, and completely loosens their joints."""
-    from pxr import Usd, UsdGeom, UsdPhysics
     
     palm = stage.GetPrimAtPath(palm_root_path)
     if not palm:
@@ -609,7 +615,6 @@ def disable_palm_physics(stage, palm_root_path):
                 # 45 degrees of limp bending is more than enough for the arm to pass.
 
 def _iter_leaf_prims(stage, palm_root_path):
-    from pxr import Usd, UsdGeom
     palm = stage.GetPrimAtPath(palm_root_path)
     if not palm:
         return
@@ -624,7 +629,6 @@ def _iter_leaf_prims(stage, palm_root_path):
 
 
 def _leaf_world_positions(stage, palm_root_path):
-    from pxr import UsdGeom
     out = []
     for prim in _iter_leaf_prims(stage, palm_root_path):
         xf = UsdGeom.Xformable(prim)
@@ -638,7 +642,6 @@ def _leaf_world_positions(stage, palm_root_path):
 
 def set_leaf_prims_active(stage, palm_root_path, active=True):
     """Activate or deactivate every leaf under palm_root_path using Visibility."""
-    from pxr import UsdGeom
     for child in _iter_leaf_prims(stage, palm_root_path):
         if UsdGeom.Xformable(child):
             # Use Imageable to toggle visibility safely without breaking PhysX
@@ -660,7 +663,6 @@ def get_crown_centroid(stage, palm_root_path):
 
 def remove_top_leaves(stage, palm_root_path, crown_z, keep_ratio,
                       z_threshold_offset=LEAF_CULL_Z_OFFSET):
-    from pxr import UsdGeom
     cull_z = crown_z + z_threshold_offset
     leaves = _leaf_world_positions(stage, palm_root_path)
     
@@ -674,7 +676,6 @@ def remove_top_leaves(stage, palm_root_path, crown_z, keep_ratio,
 
 
 def spawn_target_marker(stage, position_world, marker_path, radius=0.04, color=(1.0, 0.0, 0.0)):
-    from pxr import UsdGeom, Gf, Sdf
     if stage.GetPrimAtPath(marker_path):
         stage.RemovePrim(marker_path)
     sphere = UsdGeom.Sphere.Define(stage, Sdf.Path(marker_path))
@@ -1179,7 +1180,6 @@ def main():
     num_envs = env.unwrapped.num_envs
 
     import omni.usd
-    from pxr import UsdGeom
     stage = omni.usd.get_context().get_stage()
     
     # Resolve all relative material texture paths to absolute paths
@@ -1189,6 +1189,8 @@ def main():
         _resolve_material_texture_paths(stage, palm_root_path)
     
     palm_root_paths = [get_palm_root_path(env_id) for env_id in range(num_envs)]
+    
+    list_all_prims(stage, "/World")
     
     # Get the crown centroid position for the first env to initialize robot nearby
     if palm_root_paths:
