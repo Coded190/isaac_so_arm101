@@ -1573,27 +1573,42 @@ def main():
                 cull_prob=args_cli.top_leaf_cull_prob,
                 env_ids=reset_env_ids,
             )
+            # =========================================================
+            # 1. FIRST: Randomize the trees in the resetting environments
+            # =========================================================
+            for env_id in reset_env_ids:
+                specific_palm_path = f"/World/envs/env_{env_id}/palm_tree_crown"
+                randomize_palm_dimensions(stage, specific_palm_path)
+                
+            # =========================================================
+            # Place the robot (Now it knows the TRUE height/width of the new tree!)
+            # =========================================================
             randomize_robot_root_pose(
                 env=env, stage=stage, palm_root_paths=palm_root_paths,
                 episode_rng=episode_rng, env_ids=reset_env_ids,
             )
             robot_xys_now = env.unwrapped.scene["robot"].data.root_pos_w[:, :2].cpu().numpy()
+
+            # =========================================================
+            # 2. SECOND: Calculate the new targets 
+            # (Now the centroid functions see the updated, randomized sizes!)
+            # =========================================================
             refreshed_targets = prepare_episode_targets(
                 stage=stage,
                 palm_root_paths=palm_root_paths,
                 robot_xys=robot_xys_now,
                 env_ids=reset_env_ids,
             )
+
+            # =========================================================
+            # 3. THIRD: Assign the targets and reset episode states
+            # =========================================================
             for i, env_id in enumerate(reset_env_ids):
                 current_hover_targets[env_id] = refreshed_targets[i]
                 oracles[env_id] = SprayOracle()
                 prev_states[env_id] = 0
                 leaf_stuck_steps[env_id] = 0
                 episode_frame_count[env_id] = 0
-                # --- ADD THIS: Randomize the palm dimensions on reset! ---
-                # Assuming your palm paths look something like f"/World/envs/env_{env_id}/palm_tree_crown"
-                specific_palm_path = f"/World/envs/env_{env_id}/palm_tree_crown"
-                randomize_palm_dimensions(stage, specific_palm_path)
                 
             spawn_target_markers(
                 stage, current_hover_targets,
