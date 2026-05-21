@@ -64,51 +64,48 @@ PING_TI_CFG = ArticulationCfg(
         # 1x STS3215
         "base": ImplicitActuatorCfg(
             joint_names_expr=["base_yaw"],
-            effort_limit_sim=2.94,
+            effort_limit_sim=10.0,  # <-- Increased from 2.94 to prevent stalling
             velocity_limit_sim=4.76,
-            stiffness=200.0,
-            damping=80.0,
+            stiffness=400.0,        # <-- Doubled to ensure strong positional tracking
+            damping=160.0,
         ),
         # 2x STS3250 — higher torque and speed than STS3215
         "shoulder": ImplicitActuatorCfg(
             joint_names_expr=["shoulder_pitch"],
-            effort_limit_sim=9.80,
+            effort_limit_sim=25.0,  # <-- Increased from 9.80
             velocity_limit_sim=8.05,
-            stiffness=400.0,
-            damping=160.0,
+            stiffness=800.0,        # <-- Doubled
+            damping=320.0,
         ),
         # 2x STS3215
         "elbow": ImplicitActuatorCfg(
             joint_names_expr=["elbow_pitch"],
-            effort_limit_sim=5.88,
+            effort_limit_sim=15.0,  # <-- Increased from 5.88
             velocity_limit_sim=4.76,
-            stiffness=240.0,
-            damping=90.0,
+            stiffness=500.0,        # <-- Doubled
+            damping=180.0,
         ),
-        # 1x STS3215 each — split stiffness/damping since wrist_roll bears less load
-        # Note: wrist_roll is a continuous joint in the URDF (no limits).
-        # Consider adding joint position limits in your env config to prevent
-        # unbounded spinning during training.
+        # 1x STS3215 each
         "wrist": ImplicitActuatorCfg(
             joint_names_expr=["wrist_pitch", "wrist_roll"],
-            effort_limit_sim=2.94,
+            effort_limit_sim=10.0,  # <-- Increased from 2.94 to allow pushing leaves
             velocity_limit_sim=4.76,
             stiffness={
-                "wrist_pitch": 80.0,
-                "wrist_roll":  50.0,
+                "wrist_pitch": 200.0, # <-- Increased so the wrist doesn't bend backwards when it hits a leaf
+                "wrist_roll":  100.0,
             },
             damping={
-                "wrist_pitch": 30.0,
-                "wrist_roll":  20.0,
+                "wrist_pitch": 80.0,
+                "wrist_roll":  40.0,
             },
         ),
-        # 1x STS3215
+        # Gripper can stay relatively close to real specs, but a small boost helps it not drop things
         "gripper": ImplicitActuatorCfg(
             joint_names_expr=["gripper_moving"],
-            effort_limit_sim=2.94,
+            effort_limit_sim=5.0,   # <-- Increased from 2.94
             velocity_limit_sim=4.76,
-            stiffness=60.0,
-            damping=20.0,
+            stiffness=100.0,
+            damping=40.0,
         ),
     },
     soft_joint_pos_limit_factor=1.0,
