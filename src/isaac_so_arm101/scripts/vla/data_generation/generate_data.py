@@ -129,6 +129,7 @@ except ImportError:
 import isaac_so_arm101.tasks
 from isaaclab_tasks.utils import parse_env_cfg
 from pxr import Usd, UsdGeom, UsdPhysics, UsdLux, UsdShade, Sdf, Gf
+import random
 
 
 # ─── Kinematic / FSM constants ────────────────────────────────────────────
@@ -244,9 +245,7 @@ def print_joint_properties(joint_prim):
         else:
             print(f"     {name}: {val}")
     print("---------------------------------------------------\n")
-
-import random
-
+    
 
 def _dump_dome_light_state(light, header):
     """Print a compact dump of DomeLight attrs relevant to HDRI rendering."""
@@ -499,6 +498,97 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
         shadow_attr = ambient_light.GetPrim().CreateAttribute("inputs:shadow:enable", Sdf.ValueTypeNames.Bool)
     shadow_attr.Set(False)
 
+
+def randomize_palm_dimensions(stage, palm_root_path="/root/palm_tree_crown"):
+    """
+    Safely randomizes the height, girth, crown base, and canopy size of the palm tree.
+    """
+    palm_prim = stage.GetPrimAtPath(palm_root_path)
+    if not palm_prim or not palm_prim.IsValid():
+        return
+
+    # =========================================================
+    # 1. OVERALL TREE HEIGHT & MAIN TRUNK DIAMETER
+    # =========================================================
+    # Randomize thickness (X and Y scale identically to keep trunk circular)
+    girth_scale = random.uniform(0.85, 1.15) 
+    # Randomize height (Z scale)
+    height_scale = random.uniform(0.85, 1.25) 
+    
+    root_xform = UsdGeom.Xformable(palm_prim)
+    
+    scale_op = None
+    for op in root_xform.GetOrderedXformOps():
+        if op.GetOpType() == UsdGeom.XformOp.TypeScale:
+            scale_op = op
+            break
+    if not scale_op:
+        scale_op = root_xform.AddScaleOp()
+        
+    scale_op.Set(Gf.Vec3d(girth_scale, girth_scale, height_scale))
+
+    # =========================================================
+    # 2. CROWN FINDER
+    # =========================================================
+    crown_prim = None
+    for child in Usd.PrimRange(palm_prim):
+        if child.GetName().lower() == "crown":
+            crown_prim = child
+            break
+            
+    if not crown_prim:
+        return
+
+    # =========================================================
+    # 3. TRUNK TOP (CROWN BASE) RANDOMIZATION
+    # =========================================================
+    trunk_top_path = f"{crown_prim.GetPath()}/trunk_top"
+    trunk_top_prim = stage.GetPrimAtPath(trunk_top_path)
+    
+    if trunk_top_prim.IsValid():
+        # Stretch or squash the crown base length significantly (±30%)
+        crown_shaft_height = random.uniform(0.7, 1.3)
+        
+        # Add a VERY slight thickness variation (±4%). 
+        # Biologically, palm crownshafts often bulge slightly compared to the trunk.
+        crown_shaft_girth = random.uniform(0.96, 1.04)
+        
+        tt_xform = UsdGeom.Xformable(trunk_top_prim)
+        tt_scale_op = None
+        for op in tt_xform.GetOrderedXformOps():
+            if op.GetOpType() == UsdGeom.XformOp.TypeScale:
+                tt_scale_op = op
+                break
+        if not tt_scale_op:
+            tt_scale_op = tt_xform.AddScaleOp()
+            
+        tt_scale_op.Set(Gf.Vec3d(crown_shaft_girth, crown_shaft_girth, crown_shaft_height))
+
+    # =========================================================
+    # 4. CANOPY & LEAF RANDOMIZATION
+    # =========================================================
+    # Determine an overall canopy size multiplier for this specific tree
+    canopy_multiplier = random.uniform(0.8, 1.25)
+    
+    for leaf_prim in crown_prim.GetChildren():
+        if "leaf" in leaf_prim.GetName().lower():
+            # Add slight individual variation so leaves don't all match perfectly
+            individual_leaf_variance = random.uniform(0.9, 1.1)
+            final_leaf_scale = canopy_multiplier * individual_leaf_variance
+            
+            leaf_xform = UsdGeom.Xformable(leaf_prim)
+            
+            l_scale_op = None
+            for op in leaf_xform.GetOrderedXformOps():
+                if op.GetOpType() == UsdGeom.XformOp.TypeScale:
+                    l_scale_op = op
+                    break
+            if not l_scale_op:
+                l_scale_op = leaf_xform.AddScaleOp()
+            
+            # Scale leaves uniformly so they don't get weirdly distorted
+            l_scale_op.Set(Gf.Vec3d(final_leaf_scale, final_leaf_scale, final_leaf_scale))
+    
 
 def disable_palm_physics(stage, palm_root_path):
     """Updates palm tree leaves to be lightweight, and completely loosens their joints."""
@@ -1500,6 +1590,11 @@ def main():
                 prev_states[env_id] = 0
                 leaf_stuck_steps[env_id] = 0
                 episode_frame_count[env_id] = 0
+                # --- ADD THIS: Randomize the palm dimensions on reset! ---
+                # Assuming your palm paths look something like f"/World/envs/env_{env_id}/palm_tree_crown"
+                specific_palm_path = f"/World/envs/env_{env_id}/palm_tree_crown"
+                randomize_palm_dimensions(stage, specific_palm_path)
+                
             spawn_target_markers(
                 stage, current_hover_targets,
                 env_ids=reset_env_ids, marker_type="hover", color=(0.0, 0.0, 1.0),
