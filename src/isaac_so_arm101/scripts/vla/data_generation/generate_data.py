@@ -21,8 +21,15 @@ Typical launch:
 
 import argparse
 import os
-import re
 import sys
+
+# Install noise filtering BEFORE any Isaac imports
+import config
+from noise_filter import NoiseFilter
+
+sys.stderr = NoiseFilter(sys.stderr, config.NOISE_FILTER_DROP_PATTERNS)
+sys.stdout = NoiseFilter(sys.stdout, config.NOISE_FILTER_DROP_PATTERNS)
+
 
 
 class _NoiseFilter:
