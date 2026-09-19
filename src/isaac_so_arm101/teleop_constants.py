@@ -66,7 +66,8 @@ PINGTI_JOINT_LIMITS_RAD = {
 # The extra two are mechanically coupled dual-drives (shoulder_pitch 2x STS3250,
 # elbow_pitch 2x STS3215). Sim / URDF expose one joint each, so the leader still
 # maps 6 motors → 6 joints. A real PingTi follower expands those 6 commands to
-# 8 Goal_Position writes (same target on both motors of a dual joint).
+# 8 Goal_Position writes. Dual-drive secondaries are mechanically opposite
+# (pingti_lerobot_bridge): primary `val` → secondary `-val` in RANGE_M100_100.
 PINGTI_JOINT_MOTOR_COUNTS = {
     "base_yaw": 1,
     "shoulder_pitch": 2,
@@ -78,41 +79,41 @@ PINGTI_JOINT_MOTOR_COUNTS = {
 PINGTI_PHYSICAL_MOTOR_COUNT = 8
 SO101_PHYSICAL_MOTOR_COUNT = 6
 
-# Real PingTi follower Feetech ids (base → gripper). Dual-drive joints share one
-# commanded angle; both motors get that same Goal_Position. Override ids only if
-# the bus was set up differently (`ISAAC_SO_ARM101_PINGTI_PORT`).
+# Real PingTi follower Feetech table from pingti_lerobot_bridge (the bus that
+# already teleops). Names match SO101; ids 1–8; duals are `*_secondary` and
+# receive the negated command. Handshake model numbers: sts3215=777, sts3250=2825.
 PINGTI_FOLLOWER_MOTOR_IDS = {
-    "base_yaw": 1,
-    "shoulder_pitch_1": 2,
-    "shoulder_pitch_2": 3,
-    "elbow_pitch_1": 4,
-    "elbow_pitch_2": 5,
-    "wrist_pitch": 6,
+    "shoulder_pan": 1,
+    "shoulder_lift_secondary": 2,
+    "shoulder_lift": 3,
+    "elbow_flex_secondary": 4,
+    "elbow_flex": 5,
+    "wrist_flex": 6,
     "wrist_roll": 7,
-    "gripper_moving": 8,
+    "gripper": 8,
 }
 PINGTI_FOLLOWER_MOTORS = tuple(PINGTI_FOLLOWER_MOTOR_IDS)
-# LeRobot Feetech handshake pings model numbers (sts3215=777, sts3250=2825).
-# Shoulder duals are STS3250; the rest are STS3215 (see PING_TI_CFG comments).
 PINGTI_FOLLOWER_MOTOR_MODELS = {
-    "base_yaw": "sts3215",
-    "shoulder_pitch_1": "sts3250",
-    "shoulder_pitch_2": "sts3250",
-    "elbow_pitch_1": "sts3215",
-    "elbow_pitch_2": "sts3215",
-    "wrist_pitch": "sts3215",
+    "shoulder_pan": "sts3215",
+    "shoulder_lift_secondary": "sts3250",
+    "shoulder_lift": "sts3250",
+    "elbow_flex_secondary": "sts3215",
+    "elbow_flex": "sts3215",
+    "wrist_flex": "sts3215",
     "wrist_roll": "sts3215",
-    "gripper_moving": "sts3215",
+    "gripper": "sts3215",
 }
+# URDF joint → (primary [, secondary]). Secondary gets -primary on RANGE_M100_100.
 PINGTI_JOINT_TO_FOLLOWER_MOTORS = {
-    "base_yaw": ("base_yaw",),
-    "shoulder_pitch": ("shoulder_pitch_1", "shoulder_pitch_2"),
-    "elbow_pitch": ("elbow_pitch_1", "elbow_pitch_2"),
-    "wrist_pitch": ("wrist_pitch",),
+    "base_yaw": ("shoulder_pan",),
+    "shoulder_pitch": ("shoulder_lift", "shoulder_lift_secondary"),
+    "elbow_pitch": ("elbow_flex", "elbow_flex_secondary"),
+    "wrist_pitch": ("wrist_flex",),
     "wrist_roll": ("wrist_roll",),
-    "gripper_moving": ("gripper_moving",),
+    "gripper_moving": ("gripper",),
 }
 PINGTI_DUAL_JOINTS = ("shoulder_pitch", "elbow_pitch")
+PINGTI_MIRROR_PRIMARY = ("shoulder_lift", "elbow_flex")
 
 # Default table-scene spawn (not the palm-garden coordinates on PING_TI_CFG).
 PINGTI_TABLE_POS = (0.0, 0.0, 0.0)

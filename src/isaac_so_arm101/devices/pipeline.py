@@ -10,6 +10,7 @@ from isaac_so_arm101.devices.leader_map import (
     joints6_from_named,
     leader_action_from_state,
     pingti_follower_action_from_joints,
+    pingti_follower_action_from_leader,
     pingti_joint_pos_from_leader,
 )
 from isaac_so_arm101.teleop_constants import PINGTI_JOINTS
@@ -36,7 +37,7 @@ def step_leader_followers(leader, *, so101=None, pingti=None) -> LeaderHwStep:
     raw = leader.get_action()
     joints6 = pingti_joint_pos_from_leader(raw)
     so101_action = leader_action_from_state(raw)
-    pingti_action = pingti_follower_action_from_joints(joints6)
+    pingti_action = pingti_follower_action_from_leader(raw)
     if so101 is not None:
         so101.send_action(so101_action)
     if pingti is not None:

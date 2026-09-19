@@ -1,10 +1,10 @@
 """PingTi follower: LeRobot SOFollower with an 8-motor Feetech bus.
 
-PingTi URDF/sim has 6 joints. Hardware has 8 motors: ``shoulder_pitch`` and
-``elbow_pitch`` are dual-drive, so both motors of a pair get the same
-``Goal_Position``. Connect / calibrate / ``send_action`` / disconnect are
-LeRobot's ``SOFollower`` methods. This module only replaces the 6-motor SO101
-bus with PingTi's 8 motors (STS3250 shoulder duals, STS3215 elsewhere).
+PingTi URDF/sim has 6 joints. Hardware has 8 motors matching pingti_lerobot_bridge
+(SO101 names, ids 1–8). Dual-drive secondaries are mechanically opposite, so
+``shoulder_lift`` / ``elbow_flex`` get ``-val`` on ``*_secondary``. Connect /
+calibrate / disconnect stay on LeRobot ``SOFollower``; this module replaces the
+6-motor SO101 bus and the dual-drive configure/PID table.
 """
 
 from __future__ import annotations
@@ -13,7 +13,10 @@ import importlib
 from pathlib import Path
 from typing import Any
 
-from isaac_so_arm101.devices.leader_map import pingti_follower_action_from_joints
+from isaac_so_arm101.devices.leader_map import (
+    pingti_follower_action_from_joints,
+    pingti_follower_action_from_leader,
+)
 from isaac_so_arm101.devices.so101 import (
     FollowerLike,
     LEROBOT_INSTALL_HINT,
@@ -26,7 +29,6 @@ from isaac_so_arm101.teleop_constants import (
     PINGTI_FOLLOWER_MOTOR_IDS,
     PINGTI_FOLLOWER_MOTOR_MODELS,
     PINGTI_FOLLOWER_MOTORS,
-    PINGTI_GRIPPER_JOINT,
 )
 
 
@@ -37,12 +39,7 @@ class MockPingTiFollower:
         self.sent: list[dict[str, float]] = []
 
     def send_action(self, action: dict[str, float]) -> dict[str, float]:
-        motors = {key.removesuffix(".pos") if key.endswith(".pos") else key: float(val) for key, val in action.items()}
-        missing = [name for name in PINGTI_FOLLOWER_MOTORS if name not in motors]
-        extra = [name for name in motors if name not in PINGTI_FOLLOWER_MOTORS]
-        if missing or extra:
-            raise KeyError(f"PingTi send_action expected {list(PINGTI_FOLLOWER_MOTORS)}; missing={missing} extra={extra}")
-        payload = {f"{name}.pos": motors[name] for name in PINGTI_FOLLOWER_MOTORS}
+        payload = pingti_follower_action_from_leader(action)
         self.sent.append(payload)
         return dict(payload)
 
@@ -78,7 +75,7 @@ def _pingti_motors(Motor, MotorNormMode, *, body_norm=None) -> dict:
     motors = {}
     for name, motor_id in PINGTI_FOLLOWER_MOTOR_IDS.items():
         model = PINGTI_FOLLOWER_MOTOR_MODELS[name]
-        if name == PINGTI_GRIPPER_JOINT:
+        if name == "gripper":
             norm = MotorNormMode.RANGE_0_100
         else:
             norm = body_norm
@@ -133,10 +130,10 @@ def make_pingti_follower(
             ("lerobot.robots.so_follower", ("SO101Follower", "SO101FollowerConfig")),
         )
     )
-    Motor, MotorNormMode, FeetechMotorsBus, _ = _feetech_types()
+    Motor, MotorNormMode, FeetechMotorsBus, OperatingMode = _feetech_types()
 
     class PingTiFollower(so_cls):
-        """SOFollower whose Feetech bus is PingTi (8 motors), not SO-101 (6)."""
+        """SOFollower whose Feetech bus matches pingti_lerobot_bridge (8 motors)."""
 
         name = "pingti_follower"
 
@@ -150,15 +147,26 @@ def make_pingti_follower(
             )
 
         def configure(self) -> None:
-            super().configure()
-            gripper = PINGTI_GRIPPER_JOINT
-            if gripper not in self.bus.motors:
-                return
-            # SOFollower.configure only special-cases motor name "gripper".
+            # STS3250 shoulder duals use the lower accel/PID from pingti_lerobot_bridge.
             with self.bus.torque_disabled():
-                self.bus.write("Max_Torque_Limit", gripper, 500)
-                self.bus.write("Protection_Current", gripper, 250)
-                self.bus.write("Overload_Torque", gripper, 25)
+                self.bus.configure_motors()
+                for motor in self.bus.motors:
+                    if self.bus.motors[motor].model == "sts3250":
+                        self.bus.write("Maximum_Acceleration", motor, 100)
+                        self.bus.write("Acceleration", motor, 100)
+                        self.bus.write("P_Coefficient", motor, 8)
+                        self.bus.write("I_Coefficient", motor, 0)
+                        self.bus.write("D_Coefficient", motor, 5)
+                    else:
+                        self.bus.write("Maximum_Acceleration", motor, 254)
+                        self.bus.write("Acceleration", motor, 254)
+                        self.bus.write("P_Coefficient", motor, 16)
+                        self.bus.write("I_Coefficient", motor, 0)
+                        self.bus.write("D_Coefficient", motor, 8)
+                    self.bus.write("Operating_Mode", motor, OperatingMode.POSITION.value)
+
+        def send_action(self, action):
+            return super().send_action(pingti_follower_action_from_leader(action))
 
     cfg = _make_config(cfg_cls, port=port, robot_id=robot_id, calibration_dir=calibration_dir)
     return PingTiFollower(cfg)

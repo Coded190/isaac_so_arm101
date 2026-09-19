@@ -1,8 +1,8 @@
 """SO-ARM101 leader → real PingTi follower (no Isaac Sim).
 
-Bypasses the simulator. Leader ±100 / gripper 0–100 maps to 6 PingTi radians,
-then expands to 8 Feetech ``{motor}.pos`` goals (dual-drive joints share one
-target). Optional real SO101 follower still gets the original leader dict.
+Bypasses the simulator. Leader ±100 / gripper 0–100 expands to 8 Feetech
+``{motor}.pos`` goals (SO101 names; dual-drive secondaries get ``-val``).
+Optional real SO101 follower still gets the original leader dict.
 
     UV_PROJECT_ENVIRONMENT=.venv-isaacsim-6.1 uv run --inexact teleop_hw --mock --steps 12
     UV_PROJECT_ENVIRONMENT=.venv-isaacsim-6.1 uv run --inexact teleop_hw \
@@ -163,8 +163,11 @@ def _assert_mock_isolation(result) -> None:
         if motor == "gripper" and abs(cmd) < 1.0:
             raise SystemExit(f"[teleop_hw] FAIL: gripper command was {cmd}")
         for dual in duals[1:]:
-            if pingti[f"{dual}.pos"] != cmd:
-                raise SystemExit(f"[teleop_hw] FAIL: dual {duals} mismatch for {joint}")
+            if pingti[f"{dual}.pos"] != -cmd:
+                raise SystemExit(
+                    f"[teleop_hw] FAIL: dual {duals} expected {cmd}/{-cmd}, "
+                    f"got {cmd}/{pingti[f'{dual}.pos']}"
+                )
         for other_joint, other_motors in PINGTI_JOINT_TO_FOLLOWER_MOTORS.items():
             if other_joint == joint:
                 continue

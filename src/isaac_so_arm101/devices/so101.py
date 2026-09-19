@@ -177,6 +177,7 @@ def connect_lerobot_device(device: Any, *, port: str, label: str, recalibrate: b
     connect = getattr(device, "connect", None)
     if not callable(connect):
         raise SystemExit(f"[teleop] LeRobot {label} has no connect()")
+    log_calibration_file(device, label)
     print(f"[teleop] connecting {label} port={port} id={getattr(device, 'id', None)}", flush=True)
     connect(calibrate=True)
     if recalibrate:
@@ -184,6 +185,34 @@ def connect_lerobot_device(device: Any, *, port: str, label: str, recalibrate: b
         if not callable(calibrate):
             raise SystemExit(f"[teleop] LeRobot {label} has no calibrate()")
         calibrate()
+
+
+def calibration_file_status(device: Any) -> tuple[Path | None, bool, bool]:
+    """Return (path, exists_on_disk, loaded_into_device.calibration).
+
+    LeRobot ``Robot.__init__`` already loads the JSON when ``calibration_fpath``
+    exists. This is the explicit check we log before connect.
+    """
+    raw = getattr(device, "calibration_fpath", None)
+    path = Path(raw) if raw else None
+    exists = bool(path is not None and path.is_file())
+    loaded = bool(getattr(device, "calibration", None))
+    return path, exists, loaded
+
+
+def log_calibration_file(device: Any, label: str) -> None:
+    path, exists, loaded = calibration_file_status(device)
+    print(
+        f"[teleop] {label} calibration_file={path} exists={exists} loaded={loaded}",
+        flush=True,
+    )
+    if path is not None and not exists:
+        print(
+            f"[teleop] {label} no calibration JSON at that path. "
+            "LeRobot connect(calibrate=True) will run interactive calibrate() "
+            "if the bus does not already match a file.",
+            flush=True,
+        )
 
 
 def open_so101_leader(

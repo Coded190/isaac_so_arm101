@@ -4,6 +4,7 @@ from isaac_so_arm101.devices.leader_map import (
     leader_action_from_state,
     leader_state_hold,
     pingti_follower_action_from_joints,
+    pingti_follower_action_from_leader,
     pingti_joint_pos_from_leader,
     strip_leader_keys,
 )
@@ -44,6 +45,7 @@ __all__ = [
     "open_so101_leader",
     "pingti_action_from_sim_named",
     "pingti_follower_action_from_joints",
+    "pingti_follower_action_from_leader",
     "pingti_joint_pos_from_leader",
     "run_leader_hw_loop",
     "step_leader_followers",

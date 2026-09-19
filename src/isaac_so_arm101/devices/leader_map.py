@@ -12,8 +12,8 @@ from isaac_so_arm101.teleop_constants import (
     PINGTI_FOLLOWER_MOTORS,
     PINGTI_GRIPPER_JOINT,
     PINGTI_JOINT_LIMITS_RAD,
-    PINGTI_JOINT_TO_FOLLOWER_MOTORS,
     PINGTI_JOINTS,
+    PINGTI_MIRROR_PRIMARY,
     SO101_LEADER_ARM_RANGE,
     SO101_LEADER_GRIPPER_RANGE,
     SO101_LEADER_MOTORS,
@@ -113,28 +113,38 @@ def leader_action_from_state(state: dict[str, float]) -> dict[str, float]:
     return {f"{name}.pos": float(motors[name]) for name in SO101_LEADER_MOTORS}
 
 
-def pingti_follower_action_from_joints(joints: tuple[float, ...] | list[float]) -> dict[str, float]:
-    """Expand 6 PingTi URDF radians into 8 Feetech ``{motor}.pos`` goals.
+def pingti_follower_action_from_leader(state: dict[str, float]) -> dict[str, float]:
+    """6 SO101-named primaries → 8 PingTi Feetech goals (bridge dual-drive table).
 
-    Dual-drive joints (shoulder_pitch, elbow_pitch) get the **same** command on
-    both motors. Units match LeRobot RANGE_M100_100 (arm) / RANGE_0_100 (gripper).
+    ``shoulder_lift`` / ``elbow_flex`` secondaries are mechanically opposite, so
+    they get ``-val`` (RANGE_M100_100), matching pingti_lerobot_bridge.
     """
+    primary = leader_action_from_state(state)
+    motors = strip_leader_keys(primary)
+    action: dict[str, float] = {}
+    for name in PINGTI_FOLLOWER_MOTORS:
+        if name.endswith("_secondary"):
+            parent = name.removesuffix("_secondary")
+            if parent not in PINGTI_MIRROR_PRIMARY:
+                raise RuntimeError(f"unexpected secondary motor {name}")
+            action[f"{name}.pos"] = -float(motors[parent])
+        else:
+            action[f"{name}.pos"] = float(motors[name])
+    return action
+
+
+def pingti_follower_action_from_joints(joints: tuple[float, ...] | list[float]) -> dict[str, float]:
+    """Sim/URDF 6 rad → 8 Feetech ``{motor}.pos`` (SO101 names + mirrored duals)."""
     if len(joints) != len(PINGTI_JOINTS):
         raise ValueError(f"expected {len(PINGTI_JOINTS)} PingTi joints, got {len(joints)}")
-    action: dict[str, float] = {}
-    for joint, rad in zip(PINGTI_JOINTS, joints, strict=True):
+    state: dict[str, float] = {}
+    for motor, joint, rad in zip(SO101_LEADER_MOTORS, PINGTI_JOINTS, joints, strict=True):
         lo, hi = PINGTI_JOINT_LIMITS_RAD[joint]
         if joint == PINGTI_GRIPPER_JOINT:
-            norm = rad_to_gripper_0_100(rad, lo, hi)
+            state[motor] = rad_to_gripper_0_100(rad, lo, hi)
         else:
-            norm = rad_to_signed_m100(rad, lo, hi)
-        motors = PINGTI_JOINT_TO_FOLLOWER_MOTORS[joint]
-        for motor in motors:
-            action[f"{motor}.pos"] = float(norm)
-    missing = [name for name in PINGTI_FOLLOWER_MOTORS if f"{name}.pos" not in action]
-    if missing:
-        raise RuntimeError(f"PingTi follower action missing {missing}")
-    return action
+            state[motor] = rad_to_signed_m100(rad, lo, hi)
+    return pingti_follower_action_from_leader(state)
 
 
 def joints6_from_named(positions: dict[str, float]) -> tuple[float, ...]:

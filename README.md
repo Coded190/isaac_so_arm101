@@ -85,7 +85,7 @@ The Kit Property panel edits USD; teleop copies `/World/envs/env_0/Robot` `xform
 
 Isaac Lab already uses `--device` for `cuda`/`cpu`. The leader is `--teleop_device so101leader`. That swaps PingTi to **6-D absolute `JointPosition`** (not 7-D DiffIK). Motor map: `shoulder_pan→base_yaw`, `shoulder_lift→shoulder_pitch`, `elbow_flex→elbow_pitch`, `wrist_flex→wrist_pitch`, `wrist_roll→wrist_roll`, `gripper→gripper_moving`. Leader 0 stays PingTi 0; ±100 maps to URDF limits. Gripper 0–100 lerps the URDF range.
 
-PingTi hardware has **8 motors** (shoulder_pitch and elbow_pitch are dual-drive). The URDF/sim still has **6 joints**; each dual pair is one joint, so the 6-D leader map is correct. A real PingTi follower expands those 6 sim joint targets to 8 Feetech `Goal_Position` writes (same command on both motors of a dual joint).
+PingTi hardware has **8 motors** (shoulder_pitch and elbow_pitch are dual-drive). The URDF/sim still has **6 joints**; each dual pair is one joint, so the 6-D leader map is correct. A real PingTi follower expands those 6 commands to 8 Feetech `Goal_Position` writes. Dual-drive secondaries are mechanically opposite (`-val` in RANGE_M100_100), matching `pingti_lerobot_bridge`.
 
 LeRobot is **not** in the default lockfile (it can move torch). Install the `hw` extra (or pip) on the Sim 6.1 venv, then restore the torch pin if needed:
 
@@ -118,7 +118,9 @@ UV_PROJECT_ENVIRONMENT=.venv-isaacsim-6.1 uv run --inexact teleop --scene palm -
   --teleop_device so101leader --port /dev/ttyACM0 --pingti_port /dev/ttyACM2
 ```
 
-Default Feetech ids are 1–8 (`base_yaw`, `shoulder_pitch_1/2`, `elbow_pitch_1/2`, `wrist_pitch`, `wrist_roll`, `gripper_moving`). LeRobot handshake checks model numbers: **STS3250** on the shoulder duals, **STS3215** on the rest. First connect with no calibration file runs LeRobot's interactive `calibrate()` (same prompt as `lerobot-calibrate` for SO101). There is no `lerobot-calibrate --robot.type=pingti_follower`; use `--recalibrate` on `teleop` / `teleop_hw`. Calibration JSON is stored under LeRobot's cache as `pingti_follower/{id}.json`.
+The Feetech bus matches the working `pingti_lerobot_bridge` table (SO101 names, ids 1–8): `shoulder_pan`, `shoulder_lift_secondary` (STS3250), `shoulder_lift` (STS3250), `elbow_flex_secondary`, `elbow_flex`, `wrist_flex`, `wrist_roll`, `gripper`. Dual-drive secondaries are mounted opposite, so they get **`-val`** (RANGE_M100_100), not the same Goal_Position. Handshake model numbers: sts3215=777, sts3250=2825.
+
+LeRobot `Robot.__init__` already loads `~/.cache/huggingface/lerobot/calibration/robots/{name}/{id}.json` when that file exists. Before `connect()` we also log `calibration_file=... exists=... loaded=...`. Missing file → `connect(calibrate=True)` runs interactive `calibrate()`. Recalibrate later with `--recalibrate`. Do **not** copy the old bridge `.cache/calibration/pingti/*.json` (legacy 6-motor list format). There is no `lerobot-calibrate --robot.type=pingti_follower` unless that plugin is installed.
 
 No-sim **SO101 leader → real PingTi follower** (bypasses Isaac):
 

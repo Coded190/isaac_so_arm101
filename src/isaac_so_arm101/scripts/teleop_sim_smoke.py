@@ -105,8 +105,8 @@ def _assert_pingti_duals(action: dict[str, float], label: str) -> None:
         motors = PINGTI_JOINT_TO_FOLLOWER_MOTORS[joint]
         a = action[f"{motors[0]}.pos"]
         b = action[f"{motors[1]}.pos"]
-        if a != b:
-            raise SystemExit(f"[smoke] FAIL {label}: {joint} dual mismatch {a} vs {b}")
+        if a != -b:
+            raise SystemExit(f"[smoke] FAIL {label}: {joint} dual {a} vs {b} (expected secondary=-primary)")
 
 
 def run_keyboard() -> None:
@@ -162,7 +162,7 @@ def run_keyboard() -> None:
             )
         print(
             f"[smoke] keyboard mock pingti sends={len(pingti.sent)} last_dual_shoulder="
-            f"{hw['shoulder_pitch_1.pos']:.3f}/{hw['shoulder_pitch_2.pos']:.3f}",
+            f"{hw['shoulder_lift.pos']:.3f}/{hw['shoulder_lift_secondary.pos']:.3f}",
             flush=True,
         )
         print("[smoke] PASS keyboard PingTi EE +z and gripper close", flush=True)
