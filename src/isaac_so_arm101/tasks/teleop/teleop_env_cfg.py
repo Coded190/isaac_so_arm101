@@ -12,7 +12,11 @@ import isaaclab_tasks.manager_based.manipulation.reach.mdp as mdp
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg
 from isaaclab.controllers import DifferentialIKControllerCfg
 from isaaclab.envs import ManagerBasedRLEnvCfg
-from isaaclab.envs.mdp import BinaryJointPositionActionCfg, DifferentialInverseKinematicsActionCfg
+from isaaclab.envs.mdp import (
+    BinaryJointPositionActionCfg,
+    DifferentialInverseKinematicsActionCfg,
+    JointPositionActionCfg,
+)
 from isaaclab.managers import ActionTermCfg as ActionTerm
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
@@ -34,6 +38,8 @@ from isaac_so_arm101.teleop_constants import (
     PINGTI_TABLE_POS,
     PINGTI_TABLE_ROT,
 )
+
+TELEOP_DEVICES = ("keyboard", "so101leader")
 
 
 def _zero_joint_state(*, pos, rot) -> ArticulationCfg.InitialStateCfg:
@@ -196,6 +202,37 @@ def _apply_se3_actions(cfg) -> None:
         joint_names=[PINGTI_GRIPPER_JOINT],
         open_command_expr={PINGTI_GRIPPER_JOINT: GRIPPER_OPEN_RAD},
         close_command_expr={PINGTI_GRIPPER_JOINT: GRIPPER_CLOSED_RAD},
+    )
+
+
+def _apply_joint_pos_actions(cfg) -> None:
+    """Absolute 6-D joint targets from the SO-ARM101 leader (not DiffIK)."""
+    cfg.actions.arm_action = JointPositionActionCfg(
+        asset_name="robot",
+        joint_names=list(PINGTI_ARM_JOINTS),
+        scale=1.0,
+        use_default_offset=False,
+        preserve_order=True,
+    )
+    cfg.actions.gripper_action = JointPositionActionCfg(
+        asset_name="robot",
+        joint_names=[PINGTI_GRIPPER_JOINT],
+        scale=1.0,
+        use_default_offset=False,
+        preserve_order=True,
+    )
+
+
+def apply_teleop_device(cfg, teleop_device: str) -> None:
+    """Swap action terms after ``parse_env_cfg``. Keyboard stays 7-D SE3."""
+    if teleop_device == "keyboard":
+        _apply_se3_actions(cfg)
+        return
+    if teleop_device == "so101leader":
+        _apply_joint_pos_actions(cfg)
+        return
+    raise ValueError(
+        f"Unsupported --teleop_device={teleop_device!r}. Use one of {TELEOP_DEVICES}."
     )
 
 

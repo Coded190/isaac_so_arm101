@@ -18,7 +18,7 @@ Keyboard teleop (this repo's default `uv sync`) targets **Python 3.12 + Isaac Si
    ```bash
    curl -LsSf https://astral.sh/uv/install.sh | sh
    ```
-2. **Pin and sync Sim 6.1 + torch 2.11** (matches the Lab 3.0 [quickstart — With Isaac Sim](https://isaac-sim.github.io/IsaacLab/v3.0.0-beta2/source/setup/quickstart.html)):
+2. **Pin and sync Sim 6.1 + torch 2.11** (matches the Lab 3.0 [quickstart — With Isaac Sim](https://isaac-sim.github.io/IsaacLab/v3.0.0-beta2/source/setup/quickstart.html)). The GitHub repo is public (no token to clone/pull). Scene USDs are **not** in git; `fetch_assets` pulls the public Hub dataset (no Hub token):
    ```bash
    git clone https://github.com/Coded190/isaac_so_arm101.git
    cd isaac_so_arm101
@@ -80,6 +80,42 @@ UV_PROJECT_ENVIRONMENT=.venv-isaacsim-6.1 uv run --inexact fetch_assets
 ```
 
 The Kit Property panel edits USD; teleop copies `/World/envs/env_0/Robot` `xformOp:translate` + `xformOp:orient` (Gf WXYZ → Lab 3 XYZW tensors) and **holds that pose every physics step** so the free root stays at crown height. Scale is reapplied onto Fabric after PhysX stomps `worldMatrix`. Grep `reason=usd_attr` / `reason=hold` / `written_q`.
+
+### SO-ARM101 leader (optional hardware)
+
+Isaac Lab already uses `--device` for `cuda`/`cpu`. The leader is `--teleop_device so101leader`. That swaps PingTi to **6-D absolute `JointPosition`** (not 7-D DiffIK). Motor map: `shoulder_pan→base_yaw`, `shoulder_lift→shoulder_pitch`, `elbow_flex→elbow_pitch`, `wrist_flex→wrist_pitch`, `wrist_roll→wrist_roll`, `gripper→gripper_moving`. Leader 0 stays PingTi 0; ±100 maps to URDF limits. Gripper 0–100 lerps the URDF range.
+
+PingTi hardware has **8 motors** (shoulder_pitch and elbow_pitch are dual-drive). The URDF/sim still has **6 joints**; each dual pair is one joint, so the 6-D leader map is correct. A real PingTi follower later sends the same target to both motors of a dual joint.
+
+LeRobot is **not** in the default lockfile (it can move torch). Install the `hw` extra (or pip) on the Sim 6.1 venv, then restore the torch pin if needed:
+
+```bash
+UV_PROJECT_ENVIRONMENT=.venv-isaacsim-6.1 uv pip install 'lerobot[feetech]'
+UV_PROJECT_ENVIRONMENT=.venv-isaacsim-6.1 uv pip install -U torch==2.11.0 torchvision==0.26.0 \
+  --index-url https://download.pytorch.org/whl/cu128
+sudo usermod -aG dialout "$USER"   # then log out/in for /dev/ttyACM*
+lerobot-calibrate --teleop.type=so101_leader --teleop.port=/dev/ttyACM0 --teleop.id=so101_leader
+UV_PROJECT_ENVIRONMENT=.venv-isaacsim-6.1 uv run --inexact teleop --scene palm --viz kit \
+  --teleop_device so101leader --port /dev/ttyACM0
+```
+
+Optional real SO101 follower (same leader motor dict, **not** PingTi radians):
+
+```bash
+lerobot-calibrate --robot.type=so101_follower --robot.port=/dev/ttyACM1 --robot.id=so101_follower
+UV_PROJECT_ENVIRONMENT=.venv-isaacsim-6.1 uv run --inexact teleop --scene palm --viz kit \
+  --teleop_device so101leader --port /dev/ttyACM0 --follower_port /dev/ttyACM1
+```
+
+No serial yet? `--teleop_device so101leader --mock_leader` holds zeros so you can check the 6-D action space in Kit.
+
+Headless check that keyboard SE3 and a **scripted** SO101 leader trajectory actually move PingTi (no USB):
+
+```bash
+UV_PROJECT_ENVIRONMENT=.venv-isaacsim-6.1 uv run --inexact teleop_sim_smoke --viz none
+```
+
+Expect `[smoke] PASS keyboard` and `[smoke] PASS leader`. Grep `motor=shoulder_lift -> shoulder_pitch`.
 
 Upload the pack (after Hub login). `huggingface-cli` is not on the system PATH; use the Sim 6.1 venv:
 

@@ -90,6 +90,9 @@ class TeleopActionTests(unittest.TestCase):
         self.assertIn("IK singular", keyboard)
         self.assertIn("reason=hold", keyboard)
         self.assertIn("fix_base=False", TELEOP_CFG.read_text(encoding="utf-8"))
+        self.assertIn("--teleop_device", keyboard)
+        self.assertIn("so101leader", keyboard)
+        self.assertIn("apply_teleop_device", keyboard)
 
     def test_palm_spawn_is_outside_legacy_canopy_xy(self):
         legacy = (0.30706, 0.49191, 4.65058)
@@ -127,6 +130,7 @@ class TeleopActionTests(unittest.TestCase):
         self.assertIn("huggingface-cli", source)
         self.assertIn("HF_LOGIN_HINT", source)
         self.assertIn("public dataset does not need a token", source)
+        self.assertIn("token=False", source)
 
 
 if __name__ == "__main__":

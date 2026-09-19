@@ -82,6 +82,7 @@ def _download(manifest: dict, local_dir: Path) -> None:
             repo_type=repo_type,
             revision=revision,
             local_dir=str(local_dir),
+            token=False,
         )
     except Exception as exc:  # noqa: BLE001 — Hub errors vary by version
         _exit_hub_error(

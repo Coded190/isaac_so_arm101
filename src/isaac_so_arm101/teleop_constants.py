@@ -1,10 +1,15 @@
-"""Shared teleop action layout for PingTi (keyboard now, SO-ARM101 later).
+"""Shared teleop action layout for PingTi.
 
-Device contract used by ``teleop_keyboard.py`` and the teleop env::
+Keyboard (``--teleop_device keyboard``) uses Isaac Lab ``Se3Keyboard``::
 
     advance() -> Tensor[7]  # dx, dy, dz, droll, dpitch, dyaw, gripper
 
+SO-ARM101 leader (``--teleop_device so101leader``) uses 6-D joint position::
+
+    Tensor[6]  # base_yaw, shoulder_pitch, elbow_pitch, wrist_pitch, wrist_roll, gripper_moving
+
 Gripper from Isaac Lab ``Se3Keyboard`` is binary: ``+1`` open, ``-1`` close.
+Lab AppLauncher already owns ``--device`` (cuda/cpu); hardware is ``--teleop_device``.
 """
 
 from __future__ import annotations
@@ -25,8 +30,53 @@ GRIPPER_CLOSED_RAD = 0.0
 GRIPPER_OPEN_RAD = 1.5708
 
 SE3_ACTION_DIM = 7
+JOINT_POS_ACTION_DIM = 6
 SE3_GRIPPER_OPEN_CMD = 1.0
 SE3_GRIPPER_CLOSE_CMD = -1.0
+
+# SO-ARM101 leader motors (LeRobot / Feetech ids 1-6) → PingTi URDF joints.
+SO101_LEADER_MOTORS = (
+    "shoulder_pan",
+    "shoulder_lift",
+    "elbow_flex",
+    "wrist_flex",
+    "wrist_roll",
+    "gripper",
+)
+SO101_TO_PINGTI = {
+    "shoulder_pan": "base_yaw",
+    "shoulder_lift": "shoulder_pitch",
+    "elbow_flex": "elbow_pitch",
+    "wrist_flex": "wrist_pitch",
+    "wrist_roll": "wrist_roll",
+    "gripper": "gripper_moving",
+}
+SO101_LEADER_ARM_RANGE = (-100.0, 100.0)
+SO101_LEADER_GRIPPER_RANGE = (0.0, 100.0)
+# Exact limits from PingTi_Arm_5DOF_v4_copy.urdf (radians).
+PINGTI_JOINT_LIMITS_RAD = {
+    "base_yaw": (-1.5708, 1.5708),
+    "shoulder_pitch": (-1.69313, 1.44846),
+    "elbow_pitch": (-1.44846, 1.69313),
+    "wrist_pitch": (-1.5708, 1.5708),
+    "wrist_roll": (-3.14159, 3.14159),
+    "gripper_moving": (-0.0872665, 1.5708),
+}
+# Hardware motor count per URDF joint. PingTi has 8 Feetech motors, SO101 has 6.
+# The extra two are mechanically coupled dual-drives (shoulder_pitch 2x STS3250,
+# elbow_pitch 2x STS3215). Sim / URDF expose one joint each, so the leader still
+# maps 6 motors → 6 joints. A real PingTi follower later sends the same target
+# to both motors of a dual joint.
+PINGTI_JOINT_MOTOR_COUNTS = {
+    "base_yaw": 1,
+    "shoulder_pitch": 2,
+    "elbow_pitch": 2,
+    "wrist_pitch": 1,
+    "wrist_roll": 1,
+    "gripper_moving": 1,
+}
+PINGTI_PHYSICAL_MOTOR_COUNT = 8
+SO101_PHYSICAL_MOTOR_COUNT = 6
 
 # Default table-scene spawn (not the palm-garden coordinates on PING_TI_CFG).
 PINGTI_TABLE_POS = (0.0, 0.0, 0.0)

@@ -10,6 +10,15 @@ requires ``--viz kit`` (the Omniverse window). Newton GL / Viser / Rerun
 do not feed Se3Keyboard.
 
     UV_PROJECT_ENVIRONMENT=.venv-isaacsim-6.1 uv run --inexact teleop --scene palm --num_envs 1 --viz kit
+
+SO-ARM101 leader (6-D joint position, optional real follower):
+
+    UV_PROJECT_ENVIRONMENT=.venv-isaacsim-6.1 uv run --inexact teleop --scene palm --viz kit \
+      --teleop_device so101leader --port /dev/ttyACM0
+    # optional hardware follower (leader motor space, not PingTi radians):
+    #   --follower_port /dev/ttyACM1
+    # Kit smoke without serial:
+    #   --teleop_device so101leader --mock_leader
 """
 
 from __future__ import annotations
@@ -36,6 +45,27 @@ parser.add_argument(
 )
 parser.add_argument("--sensitivity", type=float, default=1.0, help="Scale Se3Keyboard pos/rot sensitivity.")
 parser.add_argument("--log_every", type=int, default=60, help="Print [teleop] telemetry every N steps.")
+parser.add_argument(
+    "--teleop_device",
+    choices=["keyboard", "so101leader"],
+    default="keyboard",
+    help="keyboard=7-D SE3; so101leader=6-D PingTi joint pos. Lab --device is still cuda/cpu.",
+)
+parser.add_argument("--port", type=str, default="/dev/ttyACM0", help="SO101 leader serial port.")
+parser.add_argument(
+    "--follower_port",
+    type=str,
+    default=None,
+    help="Optional real SO101 follower serial port. Sends leader motor space, not PingTi radians.",
+)
+parser.add_argument("--leader_id", type=str, default="so101_leader", help="LeRobot calibration id for the leader.")
+parser.add_argument("--follower_id", type=str, default="so101_follower", help="LeRobot calibration id for the follower.")
+parser.add_argument("--recalibrate", action="store_true", help="Run LeRobot calibrate() on connect.")
+parser.add_argument(
+    "--mock_leader",
+    action="store_true",
+    help="so101leader without serial: hold leader zeros (Kit / action-space smoke).",
+)
 AppLauncher.add_app_launcher_args(parser)
 # Lab 3.0: omit --viz and AppLauncher goes headless. Se3Keyboard needs Kit.
 parser.set_defaults(visualizer=["kit"])
@@ -70,6 +100,12 @@ if args_cli.task is None:
     args_cli.task = (
         "Isaac-PING-TI-Teleop-Palm-v0" if args_cli.scene == "palm" else "Isaac-PING-TI-Teleop-v0"
     )
+if args_cli.mock_leader and args_cli.teleop_device != "so101leader":
+    print("[teleop] --mock_leader requires --teleop_device so101leader", file=sys.stderr)
+    sys.exit(2)
+if args_cli.follower_port and args_cli.teleop_device != "so101leader":
+    print("[teleop] --follower_port requires --teleop_device so101leader", file=sys.stderr)
+    sys.exit(2)
 
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
@@ -80,7 +116,12 @@ import torch  # noqa: E402
 import isaac_so_arm101.tasks  # noqa: E402, F401
 from isaaclab.devices import Se3Keyboard, Se3KeyboardCfg  # noqa: E402
 from isaaclab_tasks.utils import parse_env_cfg  # noqa: E402
-from isaac_so_arm101.teleop_constants import PINGTI_EE_BODY, SE3_ACTION_DIM  # noqa: E402
+from isaac_so_arm101.teleop_constants import (  # noqa: E402
+    JOINT_POS_ACTION_DIM,
+    PINGTI_EE_BODY,
+    SE3_ACTION_DIM,
+)
+from isaac_so_arm101.tasks.teleop.teleop_env_cfg import apply_teleop_device  # noqa: E402
 from isaac_so_arm101.teleop_root import (  # noqa: E402
     KitRootSync,
     format_root_diag,
@@ -120,16 +161,25 @@ def main():
         num_envs=args_cli.num_envs,
         use_fabric=not args_cli.disable_fabric,
     )
+    apply_teleop_device(env_cfg, args_cli.teleop_device)
     env = gym.make(args_cli.task, cfg=env_cfg)
 
-    print(f"[teleop] task={args_cli.task}")
+    use_leader = args_cli.teleop_device == "so101leader"
+    expected_dim = JOINT_POS_ACTION_DIM if use_leader else SE3_ACTION_DIM
+    print(f"[teleop] task={args_cli.task} teleop_device={args_cli.teleop_device} action_dim={expected_dim}")
     print(f"[teleop] Gym observation space: {env.observation_space}")
     print(f"[teleop] Gym action space: {env.action_space}")
     print("[teleop] Click the Isaac Sim viewport so keyboard events go to the sim, not the terminal.")
-    print(
-        "[teleop] Keys: W/S x, A/D y, Q/E z, Z/X roll, T/G pitch, C/V yaw, "
-        "K gripper, R reset env, L clear keyboard deltas, P print bake pose."
-    )
+    if use_leader:
+        print(
+            "[teleop] SO101 leader drives PingTi joints. Keys still: R reset env, P print bake pose. "
+            f"leader_port={args_cli.port} follower_port={args_cli.follower_port} mock={args_cli.mock_leader}"
+        )
+    else:
+        print(
+            "[teleop] Keys: W/S x, A/D y, Q/E z, Z/X roll, T/G pitch, C/V yaw, "
+            "K gripper, R reset env, L clear keyboard deltas, P print bake pose."
+        )
     print(
         "[teleop] Select /World/envs/env_0/Robot and edit Translate / Orient / Scale. "
         "Panel pose is held every physics step so the free root stays at crown height "
@@ -195,56 +245,92 @@ def main():
 
     teleop.add_callback("P", _bake)
 
+    leader = None
+    follower = None
     step = 0
-    while simulation_app.is_running():
-        with torch.inference_mode():
-            cmd = teleop.advance()
-            if cmd.numel() != SE3_ACTION_DIM:
-                raise RuntimeError(
-                    f"[teleop] expected {SE3_ACTION_DIM}-D device command, got shape {tuple(cmd.shape)}"
-                )
-            if cmd.device != env.unwrapped.device:
-                cmd = cmd.to(env.unwrapped.device)
-            actions = cmd.unsqueeze(0).expand(env.unwrapped.num_envs, -1).contiguous()
-            pos_norm = float(torch.linalg.norm(cmd[:3]))
-            if pos_norm > LARGE_POS_DELTA:
-                print(f"[teleop] large pos delta={pos_norm:.3f} cmd={cmd.tolist()}")
-            sync_info = None
-            try:
-                sync_info = root_sync.apply(robot, robot_prim)
-                if sync_info.get("applied") and sync_info.get("reason") == "usd_attr":
-                    print(format_root_diag(sync_info, step=step), flush=True)
-            except Exception as exc:  # noqa: BLE001
-                if step < 5 or (args_cli.log_every > 0 and step % args_cli.log_every == 0):
-                    print(f"[teleop] USD root sync failed step={step}: {exc}", flush=True)
-            try:
-                env.step(actions)
-            except Exception as exc:  # noqa: BLE001
-                name = type(exc).__name__
-                if name in {"LinAlgError", "_LinAlgError"} or "singular" in str(exc).lower():
-                    print(
-                        f"[teleop] step={step} IK singular ({exc}); skip step. Press R to reset.",
-                        flush=True,
-                    )
-                    continue
-                raise
-            try:
-                root_sync.sync_visual_scale(robot_prim, robot)
-            except Exception as exc:  # noqa: BLE001
-                if step < 5:
-                    print(f"[teleop] fabric scale sync failed step={step}: {exc}", flush=True)
-            step += 1
-            if args_cli.log_every > 0 and step % args_cli.log_every == 0:
-                robot = env.unwrapped.scene["robot"]
-                joints = robot.data.joint_pos[0].detach()
-                print(
-                    f"[teleop] step={step} action={ [round(x, 4) for x in cmd.tolist()] } "
-                    f"{_ee_pose_str(env)} joints={ [round(x, 3) for x in joints.tolist()] }"
-                )
-                if sync_info is not None:
-                    print(format_root_diag(sync_info, step=step), flush=True)
+    try:
+        if use_leader:
+            from isaac_so_arm101.devices.leader_map import (
+                leader_action_from_state,
+                pingti_joint_pos_from_leader,
+            )
+            from isaac_so_arm101.devices.so101 import open_so101_follower, open_so101_leader
 
-    env.close()
+            leader = open_so101_leader(
+                port=args_cli.port,
+                robot_id=args_cli.leader_id,
+                recalibrate=args_cli.recalibrate,
+                mock=args_cli.mock_leader,
+            )
+            if args_cli.follower_port:
+                follower = open_so101_follower(
+                    port=args_cli.follower_port,
+                    robot_id=args_cli.follower_id,
+                    recalibrate=args_cli.recalibrate,
+                )
+
+        while simulation_app.is_running():
+            with torch.inference_mode():
+                if use_leader:
+                    teleop.advance()
+                    raw = leader.get_action()
+                    joints6 = pingti_joint_pos_from_leader(raw)
+                    cmd = torch.tensor(joints6, dtype=torch.float32, device=env.unwrapped.device)
+                    if follower is not None:
+                        follower.send_action(leader_action_from_state(raw))
+                else:
+                    cmd = teleop.advance()
+                if cmd.numel() != expected_dim:
+                    raise RuntimeError(
+                        f"[teleop] expected {expected_dim}-D device command, got shape {tuple(cmd.shape)}"
+                    )
+                if cmd.device != env.unwrapped.device:
+                    cmd = cmd.to(env.unwrapped.device)
+                actions = cmd.unsqueeze(0).expand(env.unwrapped.num_envs, -1).contiguous()
+                if not use_leader:
+                    pos_norm = float(torch.linalg.norm(cmd[:3]))
+                    if pos_norm > LARGE_POS_DELTA:
+                        print(f"[teleop] large pos delta={pos_norm:.3f} cmd={cmd.tolist()}")
+                sync_info = None
+                try:
+                    sync_info = root_sync.apply(robot, robot_prim)
+                    if sync_info.get("applied") and sync_info.get("reason") == "usd_attr":
+                        print(format_root_diag(sync_info, step=step), flush=True)
+                except Exception as exc:  # noqa: BLE001
+                    if step < 5 or (args_cli.log_every > 0 and step % args_cli.log_every == 0):
+                        print(f"[teleop] USD root sync failed step={step}: {exc}", flush=True)
+                try:
+                    env.step(actions)
+                except Exception as exc:  # noqa: BLE001
+                    name = type(exc).__name__
+                    if name in {"LinAlgError", "_LinAlgError"} or "singular" in str(exc).lower():
+                        print(
+                            f"[teleop] step={step} IK singular ({exc}); skip step. Press R to reset.",
+                            flush=True,
+                        )
+                        continue
+                    raise
+                try:
+                    root_sync.sync_visual_scale(robot_prim, robot)
+                except Exception as exc:  # noqa: BLE001
+                    if step < 5:
+                        print(f"[teleop] fabric scale sync failed step={step}: {exc}", flush=True)
+                step += 1
+                if args_cli.log_every > 0 and step % args_cli.log_every == 0:
+                    robot = env.unwrapped.scene["robot"]
+                    joints = robot.data.joint_pos[0].detach()
+                    print(
+                        f"[teleop] step={step} action={ [round(x, 4) for x in cmd.tolist()] } "
+                        f"{_ee_pose_str(env)} joints={ [round(x, 3) for x in joints.tolist()] }"
+                    )
+                    if sync_info is not None:
+                        print(format_root_diag(sync_info, step=step), flush=True)
+    finally:
+        if follower is not None:
+            follower.close()
+        if leader is not None:
+            leader.close()
+        env.close()
 
 
 if __name__ == "__main__":

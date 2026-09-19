@@ -58,6 +58,21 @@ class TeleopEnvCfgTests(unittest.TestCase):
         self.assertFalse(cfg.scene.robot.spawn.fix_base)
         self.assertTrue(cfg.scene.robot.spawn.rigid_props.disable_gravity)
 
+    def test_apply_so101leader_uses_absolute_joint_pos(self):
+        from isaac_so_arm101.tasks.teleop.teleop_env_cfg import apply_teleop_device
+        from isaac_so_arm101.teleop_constants import PINGTI_ARM_JOINTS, PINGTI_GRIPPER_JOINT
+
+        cfg = self.PingTiTeleopEnvCfg()
+        apply_teleop_device(cfg, "so101leader")
+        self.assertEqual(tuple(cfg.actions.arm_action.joint_names), PINGTI_ARM_JOINTS)
+        self.assertEqual(cfg.actions.gripper_action.joint_names, [PINGTI_GRIPPER_JOINT])
+        self.assertFalse(cfg.actions.arm_action.use_default_offset)
+        self.assertTrue(cfg.actions.arm_action.preserve_order)
+        apply_teleop_device(cfg, "keyboard")
+        self.assertTrue(cfg.actions.arm_action.controller.use_relative_mode)
+        with self.assertRaises(ValueError):
+            apply_teleop_device(cfg, "gamepad")
+
 
 if __name__ == "__main__":
     unittest.main()
