@@ -3,12 +3,17 @@
 
 # Virtual environments
 .venv
+.venv-isaacsim-6.1
 
 # C++
 **/cmake-build*/
 **/build*/
 **/*.so
 **/*.log*
+
+# Local/fetched scene packs (USD binaries stay out of git)
+assets/scenes/**
+!assets/scenes/.gitkeep
 
 # Omniverse
 **/*.dmp

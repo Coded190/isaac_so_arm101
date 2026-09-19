@@ -116,6 +116,7 @@ def main():
     num_envs = env.unwrapped.num_envs
     
     import omni.usd
+    from isaac_so_arm101.scene_prims import palm_root_prim_path
     stage = omni.usd.get_context().get_stage()
     
     # Initialize managers
@@ -127,7 +128,7 @@ def main():
     robot_controller = RobotController(stage, debug_verbose=config.DEBUG_VERBOSE)
     
     # Setup palm trees
-    palm_root_paths = [f"/World/envs/env_{env_id}/Scene/{config.PALM_ROOT_NAME}"
+    palm_root_paths = [palm_root_prim_path(env_id, stage=stage)
                        for env_id in range(num_envs)]
     # for palm_path in palm_root_paths:
     #     physics_setup.disable_palm_physics(stage, palm_path)
@@ -136,7 +137,7 @@ def main():
     episode_rng = np.random.default_rng(getattr(args_cli, "seed", None))
     
     # Setup lighting and initial randomization
-    lighting_manager.randomize_lighting(config.HDRI_FOLDER_PATH, env_ids=range(num_envs))
+    lighting_manager.randomize_lighting(config.get_hdri_folder_path(), env_ids=range(num_envs))
     leaf_manager.cull_episode_leaves(
         stage=stage,
         palm_root_paths=palm_root_paths,
@@ -312,7 +313,7 @@ def main():
                       f"total frames saved so far: {int(saved_frame_count.sum())}")
             
             # Re-randomize for next episode
-            lighting_manager.randomize_lighting(config.HDRI_FOLDER_PATH, env_ids=range(num_envs))
+            lighting_manager.randomize_lighting(config.get_hdri_folder_path(), env_ids=range(num_envs))
             leaf_manager.cull_episode_leaves(
                 stage=stage,
                 palm_root_paths=palm_root_paths,
@@ -322,7 +323,7 @@ def main():
             )
             
             for env_id in reset_env_ids:
-                specific_palm_path = f"/World/envs/env_{env_id}/{config.PALM_ROOT_NAME}"
+                specific_palm_path = palm_root_prim_path(env_id, stage=stage)
                 palm_randomizer.randomize_palm_dimensions(specific_palm_path)
             
             robot_controller.randomize_robot_root_pose(

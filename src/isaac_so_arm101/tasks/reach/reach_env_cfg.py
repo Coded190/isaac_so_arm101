@@ -59,9 +59,7 @@ class ReachSceneCfg(InteractiveSceneCfg):
     custom_env = AssetBaseCfg(
         prim_path="{ENV_REGEX_NS}/Scene",
         spawn=sim_utils.UsdFileCfg(
-            # usd_path="/home/cirp-lab/moore/palm_tree_models/blender/pretoria_gardens_4k/pretoria_gardens_4k_env_v2.usdc",
-            # usd_path="/home/cirplab/moore/isaac_data/palm_tree_models/blender/pretoria_gardens_4k/pretoria_gardens_4k_env_v2.usdc",
-            usd_path="/home/cirplab/moore/isaac_data/palm_tree_models/blender/pretoria_gardens_4k/palm_environment.usdc",
+            usd_path="UNSET",  # filled in ReachEnvCfg.__post_init__ via isaac_so_arm101.assets
         ),
     )
 
@@ -236,5 +234,8 @@ class ReachEnvCfg(ManagerBasedRLEnvCfg):
         self.viewer.eye = (2.5, 2.5, 1.5)
         # simulation settings
         self.sim.dt = 1.0 / 60.0
+        from isaac_so_arm101.assets import require_scene_usd
+
+        self.scene.custom_env.spawn.usd_path = str(require_scene_usd("palm_environment"))
 
 # can add a ReachEnvCfg_PLAY config to customize the environment during playback

@@ -6,6 +6,8 @@
 
 import numpy as np
 
+from isaac_so_arm101.scene_prims import PALM_ROOT_NAME
+
 
 # ─── Kinematic / FSM constants ────────────────────────────────────────────
 ACTION_CLAMP = 0.25      # recording-style slow motion (was 0.5; smoother per-step deltas)
@@ -89,10 +91,12 @@ MAX_TREE_RADIUS = 0.60  # Don't spawn too far (arm needs reasonable reach)
 # any palm leaf — the base would otherwise spawn inside / through a leaf.
 LEAF_CLEARANCE = 0.10
 PLACEMENT_MAX_ATTEMPTS = 15
-PALM_ROOT_NAME = "palm_tree_crown"
 
-# HDRI lighting setup
-HDRI_FOLDER_PATH = "/home/cirplab/moore/isaac_data/palm_tree_models/blender/pretoria_gardens_4k/hdri"
+def get_hdri_folder_path() -> str:
+    """Resolve the scene HDRI folder from the portable asset pack (not a lab path)."""
+    from isaac_so_arm101.assets import require_hdri_dir
+
+    return str(require_hdri_dir("palm_environment"))
 
 # Palm tree randomization ranges
 GIRTH_SCALE_RANGE = (0.85, 1.15)

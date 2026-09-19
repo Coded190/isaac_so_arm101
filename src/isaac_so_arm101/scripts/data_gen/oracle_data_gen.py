@@ -48,8 +48,10 @@ SPRAY_DURATION = 60      # Sim steps to "spray" at the target (~2 s at 30 Hz).
 GRIPPER_OPEN = 0.0       # "Spray on" joint position
 GRIPPER_CLOSED = 0.0     # "Spray off" joint position (leave equal if gripper is unused)
 
+from isaac_so_arm101.scene_prims import palm_root_prim_path
+
 # Path to the palm under which all leaf/trunk prims live.
-PALM_ROOT_PATH = "/World/envs/env_0/Scene/palm_tree_crown"
+PALM_ROOT_PATH = palm_root_prim_path(0)
 
 
 def _get_palm_crown_prim(stage):

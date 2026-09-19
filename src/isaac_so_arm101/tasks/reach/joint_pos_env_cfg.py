@@ -211,6 +211,9 @@ class ReachVlaEnvCfg(PingTiReachEnvCfg):
         configured_robot = self.scene.robot
         self.scene = ReachVlaSceneCfg(num_envs=self.scene.num_envs, env_spacing=self.scene.env_spacing)
         self.scene.robot = configured_robot
+        from isaac_so_arm101.assets import require_scene_usd
+
+        self.scene.custom_env.spawn.usd_path = str(require_scene_usd("palm_environment"))
 
         # The 6-DoF Arm Action
         self.actions.arm_action = DifferentialInverseKinematicsActionCfg(

@@ -221,11 +221,13 @@ MAX_TREE_RADIUS = 0.60  # Don't spawn too far (arm needs reasonable reach)
 # any palm leaf — the base would otherwise spawn inside / through a leaf.
 LEAF_CLEARANCE = 0.10
 PLACEMENT_MAX_ATTEMPTS = 15
-PALM_ROOT_NAME = "palm_tree_crown"
+from isaac_so_arm101.scene_prims import PALM_ROOT_NAME, dome_light_candidate_paths, palm_root_prim_path
+
+# PALM_ROOT_NAME imported from scene_prims (hierarchical crown payload).
 
 
-def get_palm_root_path(env_id):
-    return f"/World/envs/env_{env_id}/Scene/{PALM_ROOT_NAME}"
+def get_palm_root_path(env_id, stage=None):
+    return palm_root_prim_path(env_id, stage=stage)
 
 
 def _get_palm_crown_prim(stage, palm_root_path):
@@ -406,12 +408,18 @@ def randomize_lighting(stage, hdri_folder_path, env_ids=None):
     # Collect all valid environment lights first to get an accurate count
     valid_env_lights = []
     for env_id in env_ids:
-        light_path = f"/World/envs/env_{env_id}/Scene/DomeLight"
-        prim = stage.GetPrimAtPath(light_path)
+        prim = None
+        light_path = None
+        for candidate in dome_light_candidate_paths(env_id):
+            probe = stage.GetPrimAtPath(candidate)
+            if probe and probe.IsA(UsdLux.DomeLight):
+                prim = probe
+                light_path = candidate
+                break
         if prim and prim.IsA(UsdLux.DomeLight):
             valid_env_lights.append((env_id, prim))
         elif DEBUG_VERBOSE:
-            print(f"[WARNING] DomeLight not found at {light_path}", flush=True)
+            print(f"[WARNING] DomeLight not found at {light_path or dome_light_candidate_paths(env_id)}", flush=True)
 
     if not valid_env_lights:
         print("[WARNING] No env-local DomeLight prims were found to update.", flush=True)
@@ -1275,10 +1283,10 @@ def main():
     # Resolve all relative material texture paths to absolute paths
     # This fixes USD files with embedded relative paths like './textures/...'
     for env_id in range(num_envs):
-        palm_root_path = get_palm_root_path(env_id)
+        palm_root_path = get_palm_root_path(env_id, stage=stage)
         _resolve_material_texture_paths(stage, palm_root_path)
     
-    palm_root_paths = [get_palm_root_path(env_id) for env_id in range(num_envs)]
+    palm_root_paths = [get_palm_root_path(env_id, stage=stage) for env_id in range(num_envs)]
     
     # Get the crown centroid position for the first env to initialize robot nearby
     if palm_root_paths:
@@ -1304,7 +1312,7 @@ def main():
         disable_palm_physics(stage, palm_path)
     episode_rng = np.random.default_rng(getattr(args_cli, "seed", None))
     
-    HDRI_FOLDER_PATH = "/home/cirplab/moore/isaac_data/palm_tree_models/blender/pretoria_gardens_4k/hdri"
+    HDRI_FOLDER_PATH = config.get_hdri_folder_path()
     randomize_lighting(stage, HDRI_FOLDER_PATH, env_ids=range(num_envs))
 
     # Cull leaves BEFORE positioning the robot so that robot placement and arm
@@ -1584,7 +1592,7 @@ def main():
             # 1. FIRST: Randomize the trees in the resetting environments
             # =========================================================
             for env_id in reset_env_ids:
-                specific_palm_path = f"/World/envs/env_{env_id}/palm_tree_crown"
+                specific_palm_path = get_palm_root_path(env_id, stage=stage)
                 randomize_palm_dimensions(stage, specific_palm_path)
                 
             # =========================================================

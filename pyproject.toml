@@ -6,17 +6,24 @@ readme = "README.md"
 authors = [
     { name = "Louis Le Lay", email = "le.lay.louis@gmail.com" }
 ]
-requires-python = "==3.11.*"
+requires-python = "==3.12.*"
 dependencies = [
+    "einops>=0.8.1",
+    "huggingface_hub>=0.25.0",
+    "isaacsim[all,extscache]==6.1.0.0",
+    "opencv-python>=4.11.0.86",
+    "torch==2.11.0",
+    "torchvision==0.26.0",
+]
+
+[project.optional-dependencies]
+# OpenVLA pins stay on the Python 3.11 / Lab 2.3 / Sim 5.1 venv (.venv-isaacsim-5.1).
+# Default uv sync targets teleop (Python 3.12 + Sim 6.1) and must not pull these.
+vla = [
     "accelerate==1.1.1",
     "bitsandbytes>=0.49.2",
-    "einops>=0.8.1",
-    "isaaclab[all,isaacsim]==2.3.0",
-    "opencv-python>=4.11.0.86",
     "timm==0.9.10",
     "tokenizers==0.19.1",
-    "torch==2.7.0",
-    "torchvision==0.22.0",
     "transformers==4.40.1",
 ]
 
@@ -26,6 +33,8 @@ play = "isaac_so_arm101.scripts.rsl_rl.play:main"
 list_envs = "isaac_so_arm101.scripts.list_envs:main"
 zero_agent = "isaac_so_arm101.scripts.zero_agent:main"
 random_agent = "isaac_so_arm101.scripts.random_agent:main"
+teleop = "isaac_so_arm101.scripts.teleop_keyboard:main"
+fetch_assets = "isaac_so_arm101.scripts.fetch_assets:main"
 
 # VLA training scripts
 train_lora = "isaac_so_arm101.scripts.vla.training.train_lora:main"
@@ -49,9 +58,10 @@ vla_data_gen_v2 = "isaac_so_arm101.scripts.vla.data_generation.generate_data:mai
 
 [tool.uv]
 index-strategy = "unsafe-best-match"
+prerelease = "allow"
 environments = [
-  "sys_platform == 'linux' and implementation_name == 'cpython' and python_version == '3.11'",
-  "sys_platform == 'win32' and implementation_name == 'cpython' and python_version == '3.11'"
+  "sys_platform == 'linux' and implementation_name == 'cpython' and python_version == '3.12'",
+  "sys_platform == 'win32' and implementation_name == 'cpython' and python_version == '3.12'"
 ]
 
 [[tool.uv.index]]

@@ -10,8 +10,8 @@ dataset writing are removed — the loop only drives the simulation. Visual
 markers (blue hover sphere) and the brief rest-pose hold are kept so the
 recorded footage matches what the data-gen run looks like.
 
-Linux launch (from /home/cirplab/kantas/isaac_so_arm101):
-    .venv/bin/python src/isaac_so_arm101/scripts/recording/vla_data_gen_linux.py \\
+Linux launch:
+    uv run python src/isaac_so_arm101/scripts/recording/vla_data_gen_linux.py \\
         --task Isaac-PING-TI-VLA-v0 --num_envs 1 --enable_cameras 2>/dev/null
 """
 
@@ -165,8 +165,11 @@ LEAF_CLEARANCE = 0.10
 PLACEMENT_MAX_ATTEMPTS = 15
 
 
-def get_palm_root_path(env_id):
-    return f"/World/envs/env_{env_id}/Scene/palm_tree_crown"
+from isaac_so_arm101.scene_prims import palm_root_prim_path
+
+
+def get_palm_root_path(env_id, stage=None):
+    return palm_root_prim_path(env_id, stage=stage)
 
 
 def _get_palm_crown_prim(stage, palm_root_path):

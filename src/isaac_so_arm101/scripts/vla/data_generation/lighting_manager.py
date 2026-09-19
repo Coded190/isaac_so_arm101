@@ -16,6 +16,7 @@ from .config import (
     AMBIENT_FILL_INTENSITY,
     DEBUG_VERBOSE,
 )
+from isaac_so_arm101.scene_prims import dome_light_candidate_paths, find_dome_light_prim
 
 
 class LightingManager:
@@ -71,10 +72,15 @@ class LightingManager:
         # Collect and update valid environment lights
         valid_env_lights = []
         for env_id in env_ids:
-            light_path = f"/World/envs/env_{env_id}/Scene/DomeLight"
-            prim = self.stage.GetPrimAtPath(light_path)
-            if prim and prim.IsA(UsdLux.DomeLight):
+            prim, light_path = find_dome_light_prim(self.stage, env_id)
+            if prim is not None and prim.IsA(UsdLux.DomeLight):
                 valid_env_lights.append((env_id, prim))
+            elif self.debug_verbose:
+                print(
+                    f"[WARNING] DomeLight not found for env {env_id}; "
+                    f"tried {dome_light_candidate_paths(env_id)}",
+                    flush=True,
+                )
         
         if not valid_env_lights:
             if self.debug_verbose:

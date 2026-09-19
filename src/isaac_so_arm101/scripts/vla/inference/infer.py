@@ -12,7 +12,7 @@ config, edit the override block in main() to match.
 Adapter search order:
     $OPENVLA_ADAPTER_PATH (if set)
     <script_dir>/outputs/openvla_lora_weights
-    /home/cirplab/moore/isaac_so_arm101/src/isaac_so_arm101/scripts/vla/outputs/openvla_lora_weights
+    <repo>/outputs/openvla_lora_weights
 
 ═══════════════════════════════════════════════════════════════════════════
 DEPENDENCY VERSIONS — do NOT casually upgrade these together. They were
@@ -91,7 +91,8 @@ def find_adapter_path():
         os.environ.get("OPENVLA_ADAPTER_PATH"),
         os.path.join(os.path.dirname(os.path.abspath(__file__)),
                      "outputs", "openvla_lora_weights"),
-        "/home/cirplab/moore/isaac_so_arm101/src/isaac_so_arm101/scripts/vla/outputs/openvla_lora_weights",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                     "..", "..", "..", "..", "..", "outputs", "openvla_lora_weights"),
     ]
     for p in candidates:
         if p and os.path.isdir(p):

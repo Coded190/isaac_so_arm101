@@ -1,0 +1,16 @@
+{
+  "hf_repo_id": "coded190/isaac-so-arm101-scenes",
+  "hf_repo_type": "dataset",
+  "revision": "main",
+  "local_dir": "assets/scenes",
+  "sha256": "eba83340f29da42a7503dfdd60aeec8ce391a1f65593b4e7b447b075f48c5b0f",
+  "scenes": {
+    "palm_environment": {
+      "usd_candidates": [
+        "palm_environment.usdc"
+      ],
+      "hdri_dir": "palm_environment/hdri",
+      "sha256": "eba83340f29da42a7503dfdd60aeec8ce391a1f65593b4e7b447b075f48c5b0f"
+    }
+  }
+}

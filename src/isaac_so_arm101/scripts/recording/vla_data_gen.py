@@ -165,8 +165,11 @@ LEAF_CLEARANCE = 0.10
 PLACEMENT_MAX_ATTEMPTS = 15
 
 
-def get_palm_root_path(env_id):
-    return f"/World/envs/env_{env_id}/Scene/palm_tree_crown"
+from isaac_so_arm101.scene_prims import palm_root_prim_path
+
+
+def get_palm_root_path(env_id, stage=None):
+    return palm_root_prim_path(env_id, stage=stage)
 
 
 def _get_palm_crown_prim(stage, palm_root_path):
