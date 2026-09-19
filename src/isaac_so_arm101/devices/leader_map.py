@@ -9,8 +9,10 @@ radians in ``PINGTI_JOINTS`` order (arm then gripper).
 from __future__ import annotations
 
 from isaac_so_arm101.teleop_constants import (
+    PINGTI_FOLLOWER_MOTORS,
     PINGTI_GRIPPER_JOINT,
     PINGTI_JOINT_LIMITS_RAD,
+    PINGTI_JOINT_TO_FOLLOWER_MOTORS,
     PINGTI_JOINTS,
     SO101_LEADER_ARM_RANGE,
     SO101_LEADER_GRIPPER_RANGE,
@@ -51,6 +53,24 @@ def map_gripper_0_100(value: float, lo: float, hi: float) -> float:
     return lo + t * (hi - lo)
 
 
+def rad_to_signed_m100(rad: float, lo: float, hi: float) -> float:
+    """Inverse of ``map_signed_m100`` (joint rad → leader/follower ±100)."""
+    x = _clip(float(rad), lo, hi)
+    if x >= 0.0:
+        return (x / hi) * SO101_LEADER_ARM_RANGE[1] if hi else 0.0
+    return (x / lo) * SO101_LEADER_ARM_RANGE[0] if lo else 0.0
+
+
+def rad_to_gripper_0_100(rad: float, lo: float, hi: float) -> float:
+    x = _clip(float(rad), lo, hi)
+    span = hi - lo
+    if span == 0.0:
+        return SO101_LEADER_GRIPPER_RANGE[0]
+    t = (x - lo) / span
+    src_lo, src_hi = SO101_LEADER_GRIPPER_RANGE
+    return src_lo + t * (src_hi - src_lo)
+
+
 def leader_state_hold(values: dict[str, float] | None = None) -> dict[str, float]:
     """LeRobot-style ``{motor}.pos`` dict; unspecified motors stay at 0."""
     state = {f"{name}.pos": 0.0 for name in SO101_LEADER_MOTORS}
@@ -85,9 +105,40 @@ def pingti_joint_pos_from_leader(state: dict[str, float]) -> tuple[float, ...]:
 
 
 def leader_action_from_state(state: dict[str, float]) -> dict[str, float]:
-    """LeRobot follower ``send_action`` dict (``{motor}.pos``)."""
+    """LeRobot SO101 follower ``send_action`` dict (``{motor}.pos``)."""
     motors = strip_leader_keys(state)
     missing = [name for name in SO101_LEADER_MOTORS if name not in motors]
     if missing:
         raise KeyError(f"leader state missing motors {missing}; got {sorted(motors)}")
     return {f"{name}.pos": float(motors[name]) for name in SO101_LEADER_MOTORS}
+
+
+def pingti_follower_action_from_joints(joints: tuple[float, ...] | list[float]) -> dict[str, float]:
+    """Expand 6 PingTi URDF radians into 8 Feetech ``{motor}.pos`` goals.
+
+    Dual-drive joints (shoulder_pitch, elbow_pitch) get the **same** command on
+    both motors. Units match LeRobot RANGE_M100_100 (arm) / RANGE_0_100 (gripper).
+    """
+    if len(joints) != len(PINGTI_JOINTS):
+        raise ValueError(f"expected {len(PINGTI_JOINTS)} PingTi joints, got {len(joints)}")
+    action: dict[str, float] = {}
+    for joint, rad in zip(PINGTI_JOINTS, joints, strict=True):
+        lo, hi = PINGTI_JOINT_LIMITS_RAD[joint]
+        if joint == PINGTI_GRIPPER_JOINT:
+            norm = rad_to_gripper_0_100(rad, lo, hi)
+        else:
+            norm = rad_to_signed_m100(rad, lo, hi)
+        motors = PINGTI_JOINT_TO_FOLLOWER_MOTORS[joint]
+        for motor in motors:
+            action[f"{motor}.pos"] = float(norm)
+    missing = [name for name in PINGTI_FOLLOWER_MOTORS if f"{name}.pos" not in action]
+    if missing:
+        raise RuntimeError(f"PingTi follower action missing {missing}")
+    return action
+
+
+def joints6_from_named(positions: dict[str, float]) -> tuple[float, ...]:
+    missing = [name for name in PINGTI_JOINTS if name not in positions]
+    if missing:
+        raise KeyError(f"sim joints missing {missing}; got {sorted(positions)}")
+    return tuple(float(positions[name]) for name in PINGTI_JOINTS)

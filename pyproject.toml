@@ -35,6 +35,7 @@ zero_agent = "isaac_so_arm101.scripts.zero_agent:main"
 random_agent = "isaac_so_arm101.scripts.random_agent:main"
 teleop = "isaac_so_arm101.scripts.teleop_keyboard:main"
 teleop_sim_smoke = "isaac_so_arm101.scripts.teleop_sim_smoke:main"
+teleop_hw = "isaac_so_arm101.scripts.teleop_hw:main"
 fetch_assets = "isaac_so_arm101.scripts.fetch_assets:main"
 
 # VLA training scripts

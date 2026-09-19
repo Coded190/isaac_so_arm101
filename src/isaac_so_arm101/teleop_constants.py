@@ -65,8 +65,8 @@ PINGTI_JOINT_LIMITS_RAD = {
 # Hardware motor count per URDF joint. PingTi has 8 Feetech motors, SO101 has 6.
 # The extra two are mechanically coupled dual-drives (shoulder_pitch 2x STS3250,
 # elbow_pitch 2x STS3215). Sim / URDF expose one joint each, so the leader still
-# maps 6 motors → 6 joints. A real PingTi follower later sends the same target
-# to both motors of a dual joint.
+# maps 6 motors → 6 joints. A real PingTi follower expands those 6 commands to
+# 8 Goal_Position writes (same target on both motors of a dual joint).
 PINGTI_JOINT_MOTOR_COUNTS = {
     "base_yaw": 1,
     "shoulder_pitch": 2,
@@ -77,6 +77,42 @@ PINGTI_JOINT_MOTOR_COUNTS = {
 }
 PINGTI_PHYSICAL_MOTOR_COUNT = 8
 SO101_PHYSICAL_MOTOR_COUNT = 6
+
+# Real PingTi follower Feetech ids (base → gripper). Dual-drive joints share one
+# commanded angle; both motors get that same Goal_Position. Override ids only if
+# the bus was set up differently (`ISAAC_SO_ARM101_PINGTI_PORT`).
+PINGTI_FOLLOWER_MOTOR_IDS = {
+    "base_yaw": 1,
+    "shoulder_pitch_1": 2,
+    "shoulder_pitch_2": 3,
+    "elbow_pitch_1": 4,
+    "elbow_pitch_2": 5,
+    "wrist_pitch": 6,
+    "wrist_roll": 7,
+    "gripper_moving": 8,
+}
+PINGTI_FOLLOWER_MOTORS = tuple(PINGTI_FOLLOWER_MOTOR_IDS)
+# LeRobot Feetech handshake pings model numbers (sts3215=777, sts3250=2825).
+# Shoulder duals are STS3250; the rest are STS3215 (see PING_TI_CFG comments).
+PINGTI_FOLLOWER_MOTOR_MODELS = {
+    "base_yaw": "sts3215",
+    "shoulder_pitch_1": "sts3250",
+    "shoulder_pitch_2": "sts3250",
+    "elbow_pitch_1": "sts3215",
+    "elbow_pitch_2": "sts3215",
+    "wrist_pitch": "sts3215",
+    "wrist_roll": "sts3215",
+    "gripper_moving": "sts3215",
+}
+PINGTI_JOINT_TO_FOLLOWER_MOTORS = {
+    "base_yaw": ("base_yaw",),
+    "shoulder_pitch": ("shoulder_pitch_1", "shoulder_pitch_2"),
+    "elbow_pitch": ("elbow_pitch_1", "elbow_pitch_2"),
+    "wrist_pitch": ("wrist_pitch",),
+    "wrist_roll": ("wrist_roll",),
+    "gripper_moving": ("gripper_moving",),
+}
+PINGTI_DUAL_JOINTS = ("shoulder_pitch", "elbow_pitch")
 
 # Default table-scene spawn (not the palm-garden coordinates on PING_TI_CFG).
 PINGTI_TABLE_POS = (0.0, 0.0, 0.0)

@@ -85,7 +85,7 @@ The Kit Property panel edits USD; teleop copies `/World/envs/env_0/Robot` `xform
 
 Isaac Lab already uses `--device` for `cuda`/`cpu`. The leader is `--teleop_device so101leader`. That swaps PingTi to **6-D absolute `JointPosition`** (not 7-D DiffIK). Motor map: `shoulder_pan→base_yaw`, `shoulder_lift→shoulder_pitch`, `elbow_flex→elbow_pitch`, `wrist_flex→wrist_pitch`, `wrist_roll→wrist_roll`, `gripper→gripper_moving`. Leader 0 stays PingTi 0; ±100 maps to URDF limits. Gripper 0–100 lerps the URDF range.
 
-PingTi hardware has **8 motors** (shoulder_pitch and elbow_pitch are dual-drive). The URDF/sim still has **6 joints**; each dual pair is one joint, so the 6-D leader map is correct. A real PingTi follower later sends the same target to both motors of a dual joint.
+PingTi hardware has **8 motors** (shoulder_pitch and elbow_pitch are dual-drive). The URDF/sim still has **6 joints**; each dual pair is one joint, so the 6-D leader map is correct. A real PingTi follower expands those 6 sim joint targets to 8 Feetech `Goal_Position` writes (same command on both motors of a dual joint).
 
 LeRobot is **not** in the default lockfile (it can move torch). Install the `hw` extra (or pip) on the Sim 6.1 venv, then restore the torch pin if needed:
 
@@ -107,15 +107,36 @@ UV_PROJECT_ENVIRONMENT=.venv-isaacsim-6.1 uv run --inexact teleop --scene palm -
   --teleop_device so101leader --port /dev/ttyACM0 --follower_port /dev/ttyACM1
 ```
 
-No serial yet? `--teleop_device so101leader --mock_leader` holds zeros so you can check the 6-D action space in Kit.
+Real PingTi follower **through sim** (keyboard IK or SO101 leader). After each `env.step`, the sim's 6 `joint_pos_target` values are expanded to an 8-motor `{name}.pos` dict and sent with **LeRobot `SOFollower.send_action`** (`sync_write("Goal_Position")`). Connect / calibrate / disconnect are the same LeRobot path as the SO101 follower.
 
-Headless check that keyboard SE3 and a **scripted** SO101 leader trajectory actually move PingTi (no USB):
+```bash
+# keyboard → sim PingTi → real PingTi
+UV_PROJECT_ENVIRONMENT=.venv-isaacsim-6.1 uv run --inexact teleop --scene palm --viz kit \
+  --pingti_port /dev/ttyACM2
+# SO101 leader → sim PingTi → real PingTi (optional SO101 follower too)
+UV_PROJECT_ENVIRONMENT=.venv-isaacsim-6.1 uv run --inexact teleop --scene palm --viz kit \
+  --teleop_device so101leader --port /dev/ttyACM0 --pingti_port /dev/ttyACM2
+```
+
+Default Feetech ids are 1–8 (`base_yaw`, `shoulder_pitch_1/2`, `elbow_pitch_1/2`, `wrist_pitch`, `wrist_roll`, `gripper_moving`). LeRobot handshake checks model numbers: **STS3250** on the shoulder duals, **STS3215** on the rest. First connect with no calibration file runs LeRobot's interactive `calibrate()` (same prompt as `lerobot-calibrate` for SO101). There is no `lerobot-calibrate --robot.type=pingti_follower`; use `--recalibrate` on `teleop` / `teleop_hw`. Calibration JSON is stored under LeRobot's cache as `pingti_follower/{id}.json`.
+
+No-sim **SO101 leader → real PingTi follower** (bypasses Isaac):
+
+```bash
+UV_PROJECT_ENVIRONMENT=.venv-isaacsim-6.1 uv run --inexact teleop_hw --mock --steps 12
+UV_PROJECT_ENVIRONMENT=.venv-isaacsim-6.1 uv run --inexact teleop_hw \
+  --port /dev/ttyACM0 --pingti_port /dev/ttyACM2
+```
+
+No serial yet? `--teleop_device so101leader --mock_leader --mock_follower --mock_pingti` holds zeros / records follower dicts so you can check the 6-D and 8-motor paths in Kit.
+
+Headless check that keyboard SE3 and a **scripted** SO101 leader trajectory actually move PingTi, and that sim joints expand to an 8-motor mock (no USB):
 
 ```bash
 UV_PROJECT_ENVIRONMENT=.venv-isaacsim-6.1 uv run --inexact teleop_sim_smoke --viz none
 ```
 
-Expect `[smoke] PASS keyboard` and `[smoke] PASS leader`. Grep `motor=shoulder_lift -> shoulder_pitch`.
+Expect `[smoke] PASS keyboard` and `[smoke] PASS leader`. Grep `motor=shoulder_lift -> shoulder_pitch` and `mock pingti`.
 
 Upload the pack (after Hub login). `huggingface-cli` is not on the system PATH; use the Sim 6.1 venv:
 

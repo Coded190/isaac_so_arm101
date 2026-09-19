@@ -7,6 +7,7 @@ at module load; hardware is opened only for ``--teleop_device so101leader``.
 from __future__ import annotations
 
 import importlib
+from pathlib import Path
 from typing import Any, Protocol
 
 from isaac_so_arm101.teleop_constants import SO101_LEADER_MOTORS
@@ -66,6 +67,28 @@ class ScriptedSO101Leader:
         return None
 
 
+class MockSO101Follower:
+    """Record SO101 ``send_action`` dicts (no serial)."""
+
+    def __init__(self):
+        self.sent: list[dict[str, float]] = []
+
+    def send_action(self, action: dict[str, float]) -> dict[str, float]:
+        motors = {key.removesuffix(".pos") if key.endswith(".pos") else key: float(val) for key, val in action.items()}
+        missing = [name for name in SO101_LEADER_MOTORS if name not in motors]
+        extra = [name for name in motors if name not in SO101_LEADER_MOTORS]
+        if missing or extra:
+            raise KeyError(
+                f"SO101 send_action expected {list(SO101_LEADER_MOTORS)}; missing={missing} extra={extra}"
+            )
+        payload = {f"{name}.pos": motors[name] for name in SO101_LEADER_MOTORS}
+        self.sent.append(payload)
+        return dict(payload)
+
+    def disconnect(self) -> None:
+        return None
+
+
 class SO101LeaderSession:
     def __init__(self, inner: LeaderLike):
         self._inner = inner
@@ -115,14 +138,23 @@ def _require_lerobot() -> None:
         raise SystemExit(f"[teleop] {LEROBOT_INSTALL_HINT}") from exc
 
 
-def _make_config(cfg_cls, *, port: str, robot_id: str) -> Any:
+def _make_config(
+    cfg_cls,
+    *,
+    port: str,
+    robot_id: str,
+    calibration_dir: str | Path | None = None,
+) -> Any:
     # LeRobot 0.6 defaults use_degrees=True. Keep RANGE_M100_100 so the PingTi
     # map (leader 0 → joint 0, ±100 → URDF limits) matches origin/tele-op.
+    base: dict[str, Any] = {"port": port, "id": robot_id}
+    if calibration_dir is not None:
+        base["calibration_dir"] = Path(calibration_dir)
     kwargs_tries = (
-        {"port": port, "id": robot_id, "use_degrees": False},
-        {"port": port, "id": robot_id},
-        {"port": port, "id": robot_id, "cameras": {}},
-        {"port": port, "id": robot_id, "cameras": {}, "use_degrees": False},
+        {**base, "use_degrees": False},
+        dict(base),
+        {**base, "cameras": {}},
+        {**base, "cameras": {}, "use_degrees": False},
     )
     last_exc: Exception | None = None
     for kwargs in kwargs_tries:
@@ -131,6 +163,27 @@ def _make_config(cfg_cls, *, port: str, robot_id: str) -> Any:
         except TypeError as exc:
             last_exc = exc
     raise TypeError(f"could not construct {cfg_cls}: {last_exc}") from last_exc
+
+
+def connect_lerobot_device(device: Any, *, port: str, label: str, recalibrate: bool = False) -> None:
+    """Use LeRobot's connect/calibrate path. Do not skip calibration.
+
+    ``connect(calibrate=True)`` is what SOLeader/SOFollower expect: handshake the
+    Feetech bus, load ``~/.cache/huggingface/lerobot/.../{id}.json``, and prompt
+    if the file is missing or does not match the motors. ``get_action`` /
+    ``send_action`` then ``sync_read`` / ``sync_write`` ``Present_Position`` /
+    ``Goal_Position`` with LeRobot's RANGE_M100_100 unnormalize.
+    """
+    connect = getattr(device, "connect", None)
+    if not callable(connect):
+        raise SystemExit(f"[teleop] LeRobot {label} has no connect()")
+    print(f"[teleop] connecting {label} port={port} id={getattr(device, 'id', None)}", flush=True)
+    connect(calibrate=True)
+    if recalibrate:
+        calibrate = getattr(device, "calibrate", None)
+        if not callable(calibrate):
+            raise SystemExit(f"[teleop] LeRobot {label} has no calibrate()")
+        calibrate()
 
 
 def open_so101_leader(
@@ -153,13 +206,7 @@ def open_so101_leader(
     )
     cfg = _make_config(cfg_cls, port=port, robot_id=robot_id)
     device = cls(cfg)
-    connect = getattr(device, "connect", None)
-    if not callable(connect):
-        raise SystemExit("[teleop] LeRobot leader has no connect()")
-    print(f"[teleop] connecting SO101 leader port={port} id={robot_id}", flush=True)
-    connect(calibrate=recalibrate)
-    if recalibrate and hasattr(device, "calibrate"):
-        device.calibrate()
+    connect_lerobot_device(device, port=port, label="SO101 leader", recalibrate=recalibrate)
     return SO101LeaderSession(device)
 
 
@@ -168,7 +215,11 @@ def open_so101_follower(
     port: str,
     robot_id: str = "so101_follower",
     recalibrate: bool = False,
+    mock: bool = False,
 ) -> SO101FollowerSession:
+    if mock:
+        print("[teleop] using MockSO101Follower (no serial)", flush=True)
+        return SO101FollowerSession(MockSO101Follower())
     _require_lerobot()
     cls, cfg_cls = _first_import(
         (
@@ -179,11 +230,11 @@ def open_so101_follower(
     )
     cfg = _make_config(cfg_cls, port=port, robot_id=robot_id)
     device = cls(cfg)
-    connect = getattr(device, "connect", None)
-    if not callable(connect):
-        raise SystemExit("[teleop] LeRobot follower has no connect()")
-    print(f"[teleop] connecting SO101 follower port={port} id={robot_id}", flush=True)
-    connect(calibrate=recalibrate)
-    if recalibrate and hasattr(device, "calibrate"):
-        device.calibrate()
+    connect_lerobot_device(device, port=port, label="SO101 follower", recalibrate=recalibrate)
     return SO101FollowerSession(device)
+
+
+def require_distinct_serial_ports(*ports: str | None) -> None:
+    used = [port for port in ports if port]
+    if len(used) != len(set(used)):
+        raise SystemExit(f"[teleop] leader / follower / PingTi serial ports must be distinct, got {used}")

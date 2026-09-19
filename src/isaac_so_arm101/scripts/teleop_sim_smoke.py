@@ -34,12 +34,17 @@ import isaac_so_arm101.tasks  # noqa: E402, F401
 from isaaclab_tasks.utils import parse_env_cfg  # noqa: E402
 from isaac_so_arm101.devices.leader_map import (  # noqa: E402
     leader_state_hold,
+    pingti_follower_action_from_joints,
     pingti_joint_pos_from_leader,
 )
+from isaac_so_arm101.devices.pingti import MockPingTiFollower  # noqa: E402
 from isaac_so_arm101.tasks.teleop.teleop_env_cfg import apply_teleop_device  # noqa: E402
 from isaac_so_arm101.teleop_constants import (  # noqa: E402
     JOINT_POS_ACTION_DIM,
+    PINGTI_DUAL_JOINTS,
     PINGTI_EE_BODY,
+    PINGTI_FOLLOWER_MOTORS,
+    PINGTI_JOINT_TO_FOLLOWER_MOTORS,
     PINGTI_JOINTS,
     SE3_ACTION_DIM,
     SO101_TO_PINGTI,
@@ -47,6 +52,7 @@ from isaac_so_arm101.teleop_constants import (  # noqa: E402
 
 TASK = "Isaac-PING-TI-Teleop-v0"
 KEYBOARD_DZ = 0.04
+KEYBOARD_DY = 0.04
 LEADER_HOLD = 40.0
 EE_MIN_DELTA = 0.02
 JOINT_MIN_DELTA = 0.08
@@ -79,44 +85,111 @@ def _make_env(teleop_device: str):
     return env
 
 
-def _step(env, action_row: list[float], steps: int) -> None:
+def _step(env, action_row: list[float], steps: int, pingti: MockPingTiFollower | None = None) -> None:
     action = torch.tensor([action_row], dtype=torch.float32, device=env.unwrapped.device)
     action = action.expand(env.unwrapped.num_envs, -1).contiguous()
     for _ in range(steps):
         with torch.inference_mode():
             env.step(action)
+            if pingti is not None:
+                pingti.send_action(pingti_follower_action_from_joints(tuple(_named_joints(env)[n] for n in PINGTI_JOINTS)))
+
+
+def _assert_pingti_duals(action: dict[str, float], label: str) -> None:
+    missing = [name for name in PINGTI_FOLLOWER_MOTORS if f"{name}.pos" not in action]
+    if missing:
+        raise SystemExit(f"[smoke] FAIL {label}: PingTi action missing {missing}")
+    if len(action) != len(PINGTI_FOLLOWER_MOTORS):
+        raise SystemExit(f"[smoke] FAIL {label}: expected 8 motors, got {sorted(action)}")
+    for joint in PINGTI_DUAL_JOINTS:
+        motors = PINGTI_JOINT_TO_FOLLOWER_MOTORS[joint]
+        a = action[f"{motors[0]}.pos"]
+        b = action[f"{motors[1]}.pos"]
+        if a != b:
+            raise SystemExit(f"[smoke] FAIL {label}: {joint} dual mismatch {a} vs {b}")
 
 
 def run_keyboard() -> None:
     print("[smoke] case=keyboard task=Isaac-PING-TI-Teleop-v0 se3_dim=7", flush=True)
     env = _make_env("keyboard")
+    pingti = MockPingTiFollower()
     try:
         print(f"[smoke] keyboard action_space={env.action_space}", flush=True)
         before_ee = _ee_xyz(env)
         before_j = _named_joints(env)
-        action = [0.0, 0.0, KEYBOARD_DZ, 0.0, 0.0, 0.0, 1.0]
-        if len(action) != SE3_ACTION_DIM:
+        action_z = [0.0, 0.0, KEYBOARD_DZ, 0.0, 0.0, 0.0, 1.0]
+        if len(action_z) != SE3_ACTION_DIM:
             raise RuntimeError("keyboard smoke action is not 7-D")
-        _step(env, action, args_cli.num_steps)
-        after_ee = _ee_xyz(env)
-        after_j = _named_joints(env)
-        dz = after_ee[2] - before_ee[2]
+        _step(env, action_z, args_cli.num_steps, pingti=pingti)
+        after_z = _ee_xyz(env)
+        dz = after_z[2] - before_ee[2]
         print(
             f"[smoke] keyboard ee_before=({before_ee[0]:.4f},{before_ee[1]:.4f},{before_ee[2]:.4f}) "
-            f"ee_after=({after_ee[0]:.4f},{after_ee[1]:.4f},{after_ee[2]:.4f}) dz={dz:.4f}",
+            f"ee_after_z=({after_z[0]:.4f},{after_z[1]:.4f},{after_z[2]:.4f}) dz={dz:.4f}",
             flush=True,
         )
+        if dz < EE_MIN_DELTA:
+            raise SystemExit(
+                f"[smoke] FAIL keyboard: expected EE +z > {EE_MIN_DELTA} m, got dz={dz:.4f}"
+            )
+        mid_g = _named_joints(env)["gripper_moving"]
+        action_close = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0]
+        _step(env, action_close, args_cli.num_steps, pingti=pingti)
+        after_j = _named_joints(env)
+        after_g = after_j["gripper_moving"]
+        after_ee = _ee_xyz(env)
+        print(
+            f"[smoke] keyboard gripper {mid_g:.4f} -> {after_g:.4f} "
+            f"ee=({after_ee[0]:.4f},{after_ee[1]:.4f},{after_ee[2]:.4f})",
+            flush=True,
+        )
+        if after_g > mid_g - JOINT_MIN_DELTA:
+            raise SystemExit(
+                f"[smoke] FAIL keyboard: expected gripper close, {mid_g:.4f} -> {after_g:.4f}"
+            )
         for name in PINGTI_JOINTS:
             print(
                 f"[smoke] keyboard joint {name} {before_j.get(name, float('nan')):.4f} -> "
                 f"{after_j.get(name, float('nan')):.4f}",
                 flush=True,
             )
-        if dz < EE_MIN_DELTA:
+        hw = pingti_follower_action_from_joints(tuple(after_j[n] for n in PINGTI_JOINTS))
+        _assert_pingti_duals(hw, "keyboard mock pingti")
+        expected_sends = 2 * args_cli.num_steps
+        if len(pingti.sent) != expected_sends:
             raise SystemExit(
-                f"[smoke] FAIL keyboard: expected EE +z > {EE_MIN_DELTA} m, got dz={dz:.4f}"
+                f"[smoke] FAIL keyboard: mock pingti sent {len(pingti.sent)} != {expected_sends}"
             )
-        print("[smoke] PASS keyboard PingTi EE moved", flush=True)
+        print(
+            f"[smoke] keyboard mock pingti sends={len(pingti.sent)} last_dual_shoulder="
+            f"{hw['shoulder_pitch_1.pos']:.3f}/{hw['shoulder_pitch_2.pos']:.3f}",
+            flush=True,
+        )
+        print("[smoke] PASS keyboard PingTi EE +z and gripper close", flush=True)
+    finally:
+        env.close()
+
+    print("[smoke] case=keyboard-y from home pose", flush=True)
+    env = _make_env("keyboard")
+    pingti = MockPingTiFollower()
+    try:
+        before_ee = _ee_xyz(env)
+        action_y = [0.0, KEYBOARD_DY, 0.0, 0.0, 0.0, 0.0, 1.0]
+        _step(env, action_y, args_cli.num_steps, pingti=pingti)
+        after_ee = _ee_xyz(env)
+        dy = after_ee[1] - before_ee[1]
+        print(
+            f"[smoke] keyboard-y ee_before=({before_ee[0]:.4f},{before_ee[1]:.4f},{before_ee[2]:.4f}) "
+            f"ee_after=({after_ee[0]:.4f},{after_ee[1]:.4f},{after_ee[2]:.4f}) dy={dy:.4f}",
+            flush=True,
+        )
+        if abs(dy) < EE_MIN_DELTA:
+            raise SystemExit(
+                f"[smoke] FAIL keyboard-y: expected |EE dy| > {EE_MIN_DELTA} m, got dy={dy:.4f}"
+            )
+        hw = pingti_follower_action_from_joints(tuple(_named_joints(env)[n] for n in PINGTI_JOINTS))
+        _assert_pingti_duals(hw, "keyboard-y mock pingti")
+        print("[smoke] PASS keyboard PingTi EE moved in y", flush=True)
     finally:
         env.close()
 
@@ -124,6 +197,7 @@ def run_keyboard() -> None:
 def run_leader() -> None:
     print("[smoke] case=leader scripted SO101 get_action dict -> PingTi 6-D", flush=True)
     env = _make_env("so101leader")
+    pingti = MockPingTiFollower()
     try:
         print(f"[smoke] leader action_space={env.action_space}", flush=True)
         failures: list[str] = []
@@ -136,7 +210,7 @@ def run_leader() -> None:
             if len(target) != JOINT_POS_ACTION_DIM:
                 raise RuntimeError("leader smoke action is not 6-D")
             print(f"[smoke] leader commanding {motor} -> {joint} target={target[PINGTI_JOINTS.index(joint)]:.4f}", flush=True)
-            _step(env, list(target), args_cli.num_steps)
+            _step(env, list(target), args_cli.num_steps, pingti=pingti)
             after = _named_joints(env)
             delta = {name: after.get(name, 0.0) - before.get(name, 0.0) for name in PINGTI_JOINTS}
             commanded = abs(after[joint])
@@ -148,10 +222,15 @@ def run_leader() -> None:
             )
             if commanded < JOINT_MIN_DELTA:
                 failures.append(f"{motor}->{joint} did not move (after={after[joint]:.4f})")
+            hw = pingti_follower_action_from_joints(tuple(after[n] for n in PINGTI_JOINTS))
+            _assert_pingti_duals(hw, f"leader {motor}")
+            duals = PINGTI_JOINT_TO_FOLLOWER_MOTORS[joint]
+            if abs(hw[f"{duals[0]}.pos"]) < 1.0:
+                failures.append(f"{motor} sim joints did not expand to PingTi {duals[0]}")
         before_g = _named_joints(env)["gripper_moving"]
         grip_target = pingti_joint_pos_from_leader(leader_state_hold({"gripper": 80.0}))
         print(f"[smoke] leader commanding gripper -> gripper_moving target={grip_target[-1]:.4f}", flush=True)
-        _step(env, list(grip_target), args_cli.num_steps)
+        _step(env, list(grip_target), args_cli.num_steps, pingti=pingti)
         after_g = _named_joints(env)["gripper_moving"]
         print(
             f"[smoke] leader motor=gripper -> gripper_moving "
@@ -160,6 +239,9 @@ def run_leader() -> None:
         )
         if after_g - before_g < JOINT_MIN_DELTA and after_g < JOINT_MIN_DELTA:
             failures.append(f"gripper_moving did not open (after={after_g:.4f})")
+        if not pingti.sent:
+            failures.append("mock pingti recorded no leader sends")
+        print(f"[smoke] leader mock pingti sends={len(pingti.sent)}", flush=True)
         if failures:
             raise SystemExit("[smoke] FAIL leader: " + "; ".join(failures))
         print("[smoke] PASS leader scripted SO101 moved the mapped PingTi joints", flush=True)

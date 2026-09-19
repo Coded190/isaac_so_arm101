@@ -11,14 +11,16 @@ do not feed Se3Keyboard.
 
     UV_PROJECT_ENVIRONMENT=.venv-isaacsim-6.1 uv run --inexact teleop --scene palm --num_envs 1 --viz kit
 
-SO-ARM101 leader (6-D joint position, optional real follower):
+SO-ARM101 leader (6-D joint position, optional real followers):
 
     UV_PROJECT_ENVIRONMENT=.venv-isaacsim-6.1 uv run --inexact teleop --scene palm --viz kit \
       --teleop_device so101leader --port /dev/ttyACM0
-    # optional hardware follower (leader motor space, not PingTi radians):
+    # optional real SO101 follower (leader motor space, not PingTi radians):
     #   --follower_port /dev/ttyACM1
+    # optional real PingTi follower (sim 6 joints expanded to 8 motors):
+    #   --pingti_port /dev/ttyACM2
     # Kit smoke without serial:
-    #   --teleop_device so101leader --mock_leader
+    #   --teleop_device so101leader --mock_leader --mock_pingti --mock_follower
 """
 
 from __future__ import annotations
@@ -58,13 +60,30 @@ parser.add_argument(
     default=None,
     help="Optional real SO101 follower serial port. Sends leader motor space, not PingTi radians.",
 )
+parser.add_argument(
+    "--pingti_port",
+    type=str,
+    default=None,
+    help="Optional real PingTi follower. After each sim step, 6 joint targets expand to 8 Feetech motors.",
+)
 parser.add_argument("--leader_id", type=str, default="so101_leader", help="LeRobot calibration id for the leader.")
 parser.add_argument("--follower_id", type=str, default="so101_follower", help="LeRobot calibration id for the follower.")
+parser.add_argument("--pingti_id", type=str, default="pingti_follower", help="LeRobot calibration id for the PingTi follower.")
 parser.add_argument("--recalibrate", action="store_true", help="Run LeRobot calibrate() on connect.")
 parser.add_argument(
     "--mock_leader",
     action="store_true",
     help="so101leader without serial: hold leader zeros (Kit / action-space smoke).",
+)
+parser.add_argument(
+    "--mock_follower",
+    action="store_true",
+    help="Record SO101 follower send_action without serial (requires so101leader).",
+)
+parser.add_argument(
+    "--mock_pingti",
+    action="store_true",
+    help="Record PingTi 8-motor send_action without serial (keyboard or so101leader).",
 )
 AppLauncher.add_app_launcher_args(parser)
 # Lab 3.0: omit --viz and AppLauncher goes headless. Se3Keyboard needs Kit.
@@ -105,6 +124,9 @@ if args_cli.mock_leader and args_cli.teleop_device != "so101leader":
     sys.exit(2)
 if args_cli.follower_port and args_cli.teleop_device != "so101leader":
     print("[teleop] --follower_port requires --teleop_device so101leader", file=sys.stderr)
+    sys.exit(2)
+if args_cli.mock_follower and args_cli.teleop_device != "so101leader":
+    print("[teleop] --mock_follower requires --teleop_device so101leader", file=sys.stderr)
     sys.exit(2)
 
 app_launcher = AppLauncher(args_cli)
@@ -155,6 +177,14 @@ def _ee_pose_str(env) -> str:
 
 
 def main():
+    use_leader = args_cli.teleop_device == "so101leader"
+    from isaac_so_arm101.devices.so101 import require_distinct_serial_ports
+
+    require_distinct_serial_ports(
+        args_cli.port if use_leader and not args_cli.mock_leader else None,
+        args_cli.follower_port if not args_cli.mock_follower else None,
+        args_cli.pingti_port if not args_cli.mock_pingti else None,
+    )
     env_cfg = parse_env_cfg(
         args_cli.task,
         device=args_cli.device,
@@ -164,7 +194,6 @@ def main():
     apply_teleop_device(env_cfg, args_cli.teleop_device)
     env = gym.make(args_cli.task, cfg=env_cfg)
 
-    use_leader = args_cli.teleop_device == "so101leader"
     expected_dim = JOINT_POS_ACTION_DIM if use_leader else SE3_ACTION_DIM
     print(f"[teleop] task={args_cli.task} teleop_device={args_cli.teleop_device} action_dim={expected_dim}")
     print(f"[teleop] Gym observation space: {env.observation_space}")
@@ -173,12 +202,15 @@ def main():
     if use_leader:
         print(
             "[teleop] SO101 leader drives PingTi joints. Keys still: R reset env, P print bake pose. "
-            f"leader_port={args_cli.port} follower_port={args_cli.follower_port} mock={args_cli.mock_leader}"
+            f"leader_port={args_cli.port} follower_port={args_cli.follower_port} "
+            f"pingti_port={args_cli.pingti_port} mock_leader={args_cli.mock_leader} "
+            f"mock_follower={args_cli.mock_follower} mock_pingti={args_cli.mock_pingti}"
         )
     else:
         print(
             "[teleop] Keys: W/S x, A/D y, Q/E z, Z/X roll, T/G pitch, C/V yaw, "
-            "K gripper, R reset env, L clear keyboard deltas, P print bake pose."
+            "K gripper, R reset env, L clear keyboard deltas, P print bake pose. "
+            f"pingti_port={args_cli.pingti_port} mock_pingti={args_cli.mock_pingti}"
         )
     print(
         "[teleop] Select /World/envs/env_0/Robot and edit Translate / Orient / Scale. "
@@ -247,6 +279,7 @@ def main():
 
     leader = None
     follower = None
+    pingti = None
     step = 0
     try:
         if use_leader:
@@ -262,12 +295,23 @@ def main():
                 recalibrate=args_cli.recalibrate,
                 mock=args_cli.mock_leader,
             )
-            if args_cli.follower_port:
+            if args_cli.follower_port or args_cli.mock_follower:
                 follower = open_so101_follower(
-                    port=args_cli.follower_port,
+                    port=args_cli.follower_port or "mock",
                     robot_id=args_cli.follower_id,
                     recalibrate=args_cli.recalibrate,
+                    mock=args_cli.mock_follower or not args_cli.follower_port,
                 )
+        if args_cli.pingti_port or args_cli.mock_pingti:
+            from isaac_so_arm101.devices.pipeline import send_sim_joints_to_pingti
+            from isaac_so_arm101.devices.pingti import open_pingti_follower
+
+            pingti = open_pingti_follower(
+                port=args_cli.pingti_port or "mock",
+                robot_id=args_cli.pingti_id,
+                recalibrate=args_cli.recalibrate,
+                mock=args_cli.mock_pingti or not args_cli.pingti_port,
+            )
 
         while simulation_app.is_running():
             with torch.inference_mode():
@@ -310,6 +354,8 @@ def main():
                         )
                         continue
                     raise
+                if pingti is not None:
+                    send_sim_joints_to_pingti(robot, pingti)
                 try:
                     root_sync.sync_visual_scale(robot_prim, robot)
                 except Exception as exc:  # noqa: BLE001
@@ -326,6 +372,8 @@ def main():
                     if sync_info is not None:
                         print(format_root_diag(sync_info, step=step), flush=True)
     finally:
+        if pingti is not None:
+            pingti.close()
         if follower is not None:
             follower.close()
         if leader is not None:
