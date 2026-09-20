@@ -25,6 +25,9 @@ COCONUT_TEXTURE_PREFIX_OLD = "../coconut palm/"
 COCONUT_TEXTURE_PREFIX_NEW = "./coconut_palm_textures/"
 FLAT_PALM_PRIM = "/root/Palm"
 HIERARCHICAL_PALM_PRIM = "/root/palm_tree_crown"
+# Hub pack was saved from a Kit session. Instantiating /Render under
+# {ENV}/Scene reuses stale HydraTextures (invertToneMap) and blacks the viewport.
+STALE_KIT_RENDER_PRIM = "/Render"
 
 FETCH_HINT = "uv run fetch_assets"
 
@@ -417,6 +420,26 @@ def rewrite_relative_pack_arcs(usd_path: Path) -> list[str]:
     return changed
 
 
+def deactivate_stale_kit_render(usd_path: Path) -> list[str]:
+    """Deactivate leftover Kit ``/Render`` HydraTextures that black the viewport."""
+    try:
+        from pxr import Usd
+    except ImportError as exc:
+        raise RuntimeError("[assets] deactivate_stale_kit_render requires pxr (Isaac Sim USD).") from exc
+
+    usd_path = usd_path.resolve()
+    stage = Usd.Stage.Open(str(usd_path), Usd.Stage.LoadNone)
+    if stage is None:
+        raise RuntimeError(f"[assets] could not open USD stage: {usd_path}")
+    render = stage.GetPrimAtPath(STALE_KIT_RENDER_PRIM)
+    if not render or not render.IsValid() or not render.IsActive():
+        return []
+    render.SetActive(False)
+    if not stage.GetRootLayer().Save():
+        raise RuntimeError(f"[assets] failed to save deactivated {STALE_KIT_RENDER_PRIM}: {usd_path}")
+    return [f"{STALE_KIT_RENDER_PRIM} deactivated (stale Kit HydraTextures black the viewport)"]
+
+
 def deactivate_flat_palm(usd_path: Path) -> list[str]:
     """Deactivate leftover ``/root/Palm`` when the hierarchical payload is present."""
     try:
@@ -440,19 +463,28 @@ def deactivate_flat_palm(usd_path: Path) -> list[str]:
 
 
 def prepare_palm_environment_usd(usd_path: Path) -> list[str]:
-    """Rewrite pack arcs and hide the leftover flat Palm on the garden stage."""
+    """Rewrite pack arcs and hide leftover Kit / flat-Palm prims on the garden stage."""
     changed = rewrite_lab_absolute_usd_refs(usd_path)
     changed.extend(rewrite_relative_pack_arcs(usd_path))
     changed.extend(deactivate_flat_palm(usd_path))
+    changed.extend(deactivate_stale_kit_render(usd_path))
     return changed
 
 
 def hash_directory(directory: Path) -> str:
-    """Stable SHA256 over relative paths and file contents (chunked)."""
+    """Stable SHA256 over relative paths and file contents (chunked).
+
+    Hidden paths (``.cache``, ``.gitkeep``) are skipped so a Hub snapshot
+    that writes huggingface metadata does not fail ``fetch_assets`` verify.
+    """
     digest = hashlib.sha256()
     if not directory.is_dir():
         raise FileNotFoundError(f"Cannot hash missing directory: {directory}")
-    files = sorted(p for p in directory.rglob("*") if p.is_file())
+
+    def _visible(path: Path) -> bool:
+        return not any(part.startswith(".") for part in path.relative_to(directory).parts)
+
+    files = sorted(p for p in directory.rglob("*") if p.is_file() and _visible(p))
     for file_path in files:
         rel = file_path.relative_to(directory).as_posix().encode("utf-8")
         digest.update(rel)

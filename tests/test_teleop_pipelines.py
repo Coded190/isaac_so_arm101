@@ -21,6 +21,7 @@ from isaac_so_arm101.devices.leader_map import (
     pingti_follower_action_from_joints,
     pingti_follower_action_from_leader,
     pingti_joint_pos_from_leader,
+    pingti_named_joints_from_leader,
     rad_to_gripper_0_100,
     rad_to_signed_m100,
 )
@@ -42,6 +43,8 @@ from isaac_so_arm101.devices.so101 import (
 )
 from isaac_so_arm101.scripts.teleop_hw import main as teleop_hw_main
 from isaac_so_arm101.teleop_constants import (
+    GRIPPER_FEETECH_CLOSED_FLOOR,
+    GRIPPER_FEETECH_CLOSED_HOLD,
     JOINT_POS_ACTION_DIM,
     PINGTI_DUAL_JOINTS,
     PINGTI_FOLLOWER_MOTOR_IDS,
@@ -54,6 +57,7 @@ from isaac_so_arm101.teleop_constants import (
     PINGTI_PHYSICAL_MOTOR_COUNT,
     SE3_ACTION_DIM,
     SO101_LEADER_MOTORS,
+    SO101_PINGTI_SIGN,
     SO101_TO_PINGTI,
 )
 
@@ -89,9 +93,12 @@ class KeyboardToSimPathTests(unittest.TestCase):
         self.assertEqual(len(action), PINGTI_PHYSICAL_MOTOR_COUNT)
         self.assertEqual(tuple(k.removesuffix(".pos") for k in action), PINGTI_FOLLOWER_MOTORS)
         _assert_duals_mirrored(self, action)
-        self.assertGreater(action["shoulder_lift.pos"], 20.0)
+        # 0.4 rad → 0.4/π*100 ≈ 12.7, then undo lift sign=-1 so hardware matches the SO-101.
+        self.assertLess(action["shoulder_lift.pos"], -10.0)
+        self.assertGreater(action["shoulder_lift.pos"], -18.0)
         self.assertAlmostEqual(action["shoulder_lift_secondary.pos"], -action["shoulder_lift.pos"], places=5)
-        self.assertLess(action["elbow_flex.pos"], -10.0)
+        self.assertGreater(action["elbow_flex.pos"], 5.0)
+        self.assertLess(action["elbow_flex.pos"], 10.0)
         self.assertGreater(action["gripper.pos"], 40.0)
         self.assertAlmostEqual(action["shoulder_pan.pos"], 0.0, places=5)
         mock = MockPingTiFollower()
@@ -108,6 +115,19 @@ class KeyboardToSimPathTests(unittest.TestCase):
         step_at = source.index("env.step(actions)")
         send_at = source.index("send_sim_joints_to_pingti(robot, pingti)")
         self.assertGreater(send_at, step_at)
+        self.assertIn("pingti_follow", source)
+        self.assertIn("add_callback(_key", source)
+        self.assertIn("poll_kit_key_rising", source)
+        self.assertIn("PINGTI_FOLLOW_KEYS", source)
+        self.assertIn("--pingti_follow", source)
+        self.assertIn("--disable_pingti_torque", source)
+        self.assertIn("PINGTI_SEND_EVERY_STEPS", source)
+        self.assertIn("hw_snapshot", source)
+        self.assertIn("emit_hw_lines", source)
+        self.assertIn("holding_present_then_enable", source)
+        self.assertIn("send_failed", source)
+        self.assertIn("atexit.register(pingti.close)", source)
+        self.assertIn("PingTi shutdown", source)
         smoke = SMOKE.read_text(encoding="utf-8")
         self.assertIn("KEYBOARD_DZ", smoke)
         self.assertIn("KEYBOARD_DY", smoke)
@@ -137,7 +157,8 @@ class LeaderToSimPathTests(unittest.TestCase):
                 if other == joint:
                     continue
                 for name in other_motors:
-                    self.assertAlmostEqual(action[f"{name}.pos"], 0.0, places=5, msg=f"{motor}->{name}")
+                    expected = GRIPPER_FEETECH_CLOSED_FLOOR if name == "gripper" else 0.0
+                    self.assertAlmostEqual(action[f"{name}.pos"], expected, places=5, msg=f"{motor}->{name}")
 
     def test_scripted_leader_replays_into_sim_sized_vector(self):
         frames = [leader_state_hold({"elbow_flex": 25.0}), leader_state_hold({"elbow_flex": 50.0})]
@@ -146,7 +167,7 @@ class LeaderToSimPathTests(unittest.TestCase):
         second = pingti_joint_pos_from_leader(leader.get_action())
         self.assertEqual(len(first), JOINT_POS_ACTION_DIM)
         elbow = PINGTI_JOINTS.index("elbow_pitch")
-        self.assertGreater(second[elbow], first[elbow])
+        self.assertLess(second[elbow], first[elbow])
         self.assertAlmostEqual(first[PINGTI_JOINTS.index("base_yaw")], 0.0, places=5)
 
 
@@ -198,10 +219,12 @@ class LeaderToPingTiFollowerTests(unittest.TestCase):
         self.assertAlmostEqual(action["shoulder_lift_secondary.pos"], -action["shoulder_lift.pos"], places=5)
         self.assertAlmostEqual(action["elbow_flex.pos"], 0.0, places=5)
         self.assertAlmostEqual(action["elbow_flex_secondary.pos"], 0.0, places=5)
-        self.assertGreater(action["shoulder_lift.pos"], 20.0)
+        self.assertGreater(action["shoulder_lift.pos"], 10.0)
+        self.assertLess(action["shoulder_lift.pos"], 30.0)
         from_leader = pingti_follower_action_from_leader(leader_state_hold({"shoulder_lift": 40.0}))
         self.assertAlmostEqual(from_leader["shoulder_lift.pos"], 40.0, places=5)
         self.assertAlmostEqual(from_leader["shoulder_lift_secondary.pos"], -40.0, places=5)
+        self.assertGreater(action["shoulder_lift.pos"] * from_leader["shoulder_lift.pos"], 0.0)
         table = pingti_motor_table()
         self.assertEqual(len(table), 8)
         self.assertEqual(table["shoulder_lift_secondary"], (2, "sts3250"))
@@ -221,9 +244,10 @@ class LeaderToPingTiFollowerTests(unittest.TestCase):
                 calibration_dir=Path(tmp),
             )
             self.assertIsInstance(device, SOFollower)
-            self.assertIs(type(device).connect, SOFollower.connect)
+            self.assertIsNot(type(device).connect, SOFollower.connect)
             self.assertIs(type(device).disconnect, SOFollower.disconnect)
             self.assertIsNot(type(device).send_action, SOFollower.send_action)
+            self.assertIn("interactive motion calibration", type(device).connect.__doc__ or "")
             self.assertEqual(len(device.bus.motors), 8)
             self.assertEqual(device.bus.motors["shoulder_lift"].model, "sts3250")
             self.assertEqual(device.bus.motors["shoulder_lift_secondary"].model, "sts3250")
@@ -250,7 +274,11 @@ class LeaderToPingTiFollowerTests(unittest.TestCase):
                     joints = [0.0] * 6
                     joints[-1] = rad
                     action = pingti_follower_action_from_joints(joints)
-                    self.assertAlmostEqual(action["gripper.pos"], norm, places=5)
+                    self.assertAlmostEqual(
+                        action["gripper.pos"],
+                        max(norm, GRIPPER_FEETECH_CLOSED_FLOOR),
+                        places=5,
+                    )
                 else:
                     norm = rad_to_signed_m100(rad, lo, hi)
                     back = map_signed_m100(norm, lo, hi)
@@ -264,7 +292,158 @@ class LeaderToPingTiFollowerTests(unittest.TestCase):
         self.assertEqual(len(inner.sent), 1)
         self.assertLess(inner.sent[0]["wrist_roll.pos"], -20.0)
         self.assertAlmostEqual(inner.sent[0]["shoulder_pan.pos"], 0.0, places=5)
+        self.assertIsNone(session.hw_snapshot())
+        self.assertIsNone(session.ensure_torque_on())
         session.close()
+        self.assertTrue(session._shutdown_done)
+        session.close()
+
+    def test_slew_goal_caps_large_jumps(self):
+        from isaac_so_arm101.devices.pingti import GOAL_SLEW_MAX, slew_goal
+
+        self.assertGreaterEqual(GOAL_SLEW_MAX, 2.0)
+        self.assertLessEqual(GOAL_SLEW_MAX, 5.0)
+        self.assertAlmostEqual(slew_goal(0.0, 1.0), 1.0)
+        self.assertAlmostEqual(slew_goal(-59.0, -85.0), -59.0 - GOAL_SLEW_MAX)
+        self.assertAlmostEqual(slew_goal(10.0, 40.0), 10.0 + GOAL_SLEW_MAX)
+
+    def test_slew_cannot_slam_toward_leader_pose(self):
+        from isaac_so_arm101.devices.pingti import GOAL_SLEW_MAX, slew_goals
+
+        last = {name: 0.0 for name in PINGTI_FOLLOWER_MOTORS}
+        hw = pingti_follower_action_from_joints(
+            pingti_joint_pos_from_leader(leader_state_hold({"shoulder_lift": 80.0}))
+        )
+        target = {key.removesuffix(".pos"): float(val) for key, val in hw.items()}
+        nxt = slew_goals(last, target)
+        for name, value in nxt.items():
+            self.assertLessEqual(abs(value - last[name]), GOAL_SLEW_MAX + 1e-9, msg=name)
+        current = dict(last)
+        for _ in range(30):
+            current = slew_goals(current, target)
+        self.assertLessEqual(abs(current["shoulder_lift"]), 30 * GOAL_SLEW_MAX + 1e-9)
+        self.assertLess(abs(nxt["shoulder_lift"]), abs(target["shoulder_lift"]))
+        # Stale commanded Goal must not be the slew base: Present=0, last=50, target=100
+        # would walk Goal to 50.35 while the arm is still at 0.
+        from_present = slew_goals({"shoulder_lift": 0.0}, {"shoulder_lift": 100.0})
+        self.assertAlmostEqual(from_present["shoulder_lift"], GOAL_SLEW_MAX)
+        from_stale = slew_goals({"shoulder_lift": 50.0}, {"shoulder_lift": 100.0})
+        self.assertAlmostEqual(from_stale["shoulder_lift"], 50.0 + GOAL_SLEW_MAX)
+
+    def test_hw_commands_match_sim_radians_not_urdf_limit_scale(self):
+        """Pan URDF stop is ±π/2. Mapping that to ±100 doubled real pan vs sim."""
+        from math import pi
+
+        joints = [0.0] * 6
+        joints[0] = PINGTI_JOINT_LIMITS_RAD["base_yaw"][1]
+        action = pingti_follower_action_from_joints(joints)
+        expected = SO101_PINGTI_SIGN["shoulder_pan"] * joints[0] / pi * 100.0
+        self.assertAlmostEqual(action["shoulder_pan.pos"], expected, places=3)
+        self.assertLess(abs(action["shoulder_pan.pos"]), 55.0)
+        self.assertLess(action["shoulder_pan.pos"], 0.0)
+        self.assertAlmostEqual(
+            action["shoulder_lift_secondary.pos"],
+            -action["shoulder_lift.pos"],
+            places=5,
+        )
+
+    def test_nudge_plan_is_tiny_and_returns(self):
+        from isaac_so_arm101.devices.pingti import (
+            GOAL_SLEW_MAX,
+            NUDGE_DELTA,
+            NUDGE_MOTOR,
+            plan_nudge_and_return,
+        )
+        from isaac_so_arm101.teleop_constants import PINGTI_FOLLOWER_MOTORS
+
+        present = {name: 1.5 if name == "gripper" else -12.0 for name in PINGTI_FOLLOWER_MOTORS}
+        plan = plan_nudge_and_return(present)
+        self.assertGreaterEqual(len(plan), 2)
+        prev = present
+        peak = 0.0
+        for goals in plan:
+            for name, value in goals.items():
+                self.assertLessEqual(abs(value - prev[name]), GOAL_SLEW_MAX + 1e-9, msg=name)
+                if name != NUDGE_MOTOR:
+                    self.assertAlmostEqual(value, present[name], places=5, msg=name)
+            peak = max(peak, abs(goals[NUDGE_MOTOR] - present[NUDGE_MOTOR]))
+            prev = goals
+        self.assertAlmostEqual(peak, NUDGE_DELTA, places=5)
+        self.assertAlmostEqual(plan[-1][NUDGE_MOTOR], present[NUDGE_MOTOR], places=5)
+        with self.assertRaises(ValueError):
+            plan_nudge_and_return(present, delta=20.0)
+
+    def test_closed_gripper_never_commands_feetech_zero(self):
+        from isaac_so_arm101.devices.pingti import gripper_goal_from_present
+
+        joints = pingti_joint_pos_from_leader(leader_state_hold({"gripper": 0.0}))
+        action = pingti_follower_action_from_joints(joints)
+        self.assertGreaterEqual(action["gripper.pos"], GRIPPER_FEETECH_CLOSED_FLOOR)
+        self.assertAlmostEqual(action["gripper.pos"], GRIPPER_FEETECH_CLOSED_FLOOR, places=5)
+        self.assertAlmostEqual(gripper_goal_from_present(0.0, None), GRIPPER_FEETECH_CLOSED_FLOOR)
+        self.assertAlmostEqual(gripper_goal_from_present(0.0, 0.0), GRIPPER_FEETECH_CLOSED_FLOOR)
+        self.assertAlmostEqual(gripper_goal_from_present(0.0, 11.0), 11.0)
+        self.assertGreater(gripper_goal_from_present(80.0, 11.0), GRIPPER_FEETECH_CLOSED_HOLD)
+        self.assertLess(GRIPPER_FEETECH_CLOSED_FLOOR, GRIPPER_FEETECH_CLOSED_HOLD)
+
+    def test_mock_nudge_does_not_slam(self):
+        from isaac_so_arm101.devices.pingti import GOAL_SLEW_MAX, open_pingti_follower
+        from isaac_so_arm101.teleop_constants import PINGTI_FOLLOWER_MOTORS
+
+        session = open_pingti_follower(port="mock", mock=True)
+        inner = session._inner
+        inner._last_goal = {name: 0.0 for name in PINGTI_FOLLOWER_MOTORS}
+        sent = session.apply_nudge_and_return(pause_s=0.0)
+        self.assertGreaterEqual(len(sent), 2)
+        prev = {f"{name}.pos": 0.0 for name in PINGTI_FOLLOWER_MOTORS}
+        for payload in sent:
+            for key, value in payload.items():
+                self.assertLessEqual(abs(value - prev[key]), GOAL_SLEW_MAX + 1e-9, msg=key)
+            prev = payload
+        session.close()
+
+    def test_snap_to_leader_hardware_matches_sim_not_raw_leader(self):
+        raw = leader_state_hold({
+            "shoulder_lift": 40.0,
+            "elbow_flex": 30.0,
+            "wrist_flex": 20.0,
+            "shoulder_pan": 10.0,
+        })
+        named = pingti_named_joints_from_leader(raw)
+        hw = pingti_action_from_sim_named(named)
+        self.assertLess(named["shoulder_pitch"], 0.0)
+        self.assertLess(named["elbow_pitch"], 0.0)
+        self.assertLess(named["wrist_pitch"], 0.0)
+        self.assertLess(named["base_yaw"], 0.0)
+        self.assertGreater(hw["shoulder_lift.pos"], 0.0)
+        self.assertGreater(hw["elbow_flex.pos"], 0.0)
+        self.assertGreater(hw["wrist_flex.pos"], 0.0)
+        self.assertGreater(hw["shoulder_pan.pos"], 0.0)
+        leader_space = pingti_follower_action_from_leader(raw)
+        self.assertGreater(leader_space["shoulder_lift.pos"], 0.0)
+        self.assertGreater(leader_space["elbow_flex.pos"], 0.0)
+        self.assertNotAlmostEqual(hw["shoulder_lift.pos"], leader_space["shoulder_lift.pos"])
+        pipeline = step_leader_followers(ScriptedSO101Leader([raw]), pingti=MockPingTiFollower())
+        self.assertAlmostEqual(pipeline.pingti_action["shoulder_lift.pos"], hw["shoulder_lift.pos"], places=5)
+
+    def test_require_full_torque_disables_partial_bus(self):
+        from isaac_so_arm101.devices.pingti import require_full_torque
+
+        class DummyBus:
+            def __init__(self):
+                self.disabled = False
+
+            def disable_torque(self):
+                self.disabled = True
+
+        bus = DummyBus()
+        with self.assertRaises(SystemExit) as ctx:
+            require_full_torque(bus, {"shoulder_pan": 1, "gripper": 0}, label="unit")
+        self.assertTrue(bus.disabled)
+        self.assertIn("gripper", str(ctx.exception))
+        bus2 = DummyBus()
+        require_full_torque(bus2, {"shoulder_pan": 1, "gripper": 1}, label="unit")
+        self.assertFalse(bus2.disabled)
 
     def test_pipeline_loop_isolation(self):
         frames = [leader_state_hold()]
@@ -298,8 +477,14 @@ class LeaderToPingTiFollowerTests(unittest.TestCase):
         self.assertEqual(teleop_hw_main(["--mock", "--hz", "0"]), 0)
         source = TELEOP_HW.read_text(encoding="utf-8")
         self.assertIn("--pingti_port", source)
+        self.assertIn("--disable_pingti_torque", source)
+        self.assertIn("atexit.register(pingti.close)", source)
         self.assertIn("no Isaac Sim", source)
         self.assertNotIn("/home/cirplab", source)
+        from isaac_so_arm101.scripts.teleop_hw import parse_args
+
+        args = parse_args(["--disable_pingti_torque", "--pingti_port", "/dev/ttyACM1"])
+        self.assertTrue(args.disable_pingti_torque)
 
     def test_live_serial_skipped_without_env(self):
         pingti_port = os.environ.get("ISAAC_SO_ARM101_PINGTI_PORT")

@@ -14,6 +14,7 @@ Optional real SO101 follower still gets the original leader dict.
 from __future__ import annotations
 
 import argparse
+import atexit
 import sys
 
 from isaac_so_arm101.devices.leader_map import leader_state_hold
@@ -26,6 +27,7 @@ from isaac_so_arm101.devices.so101 import (
     require_distinct_serial_ports,
 )
 from isaac_so_arm101.teleop_constants import (
+    GRIPPER_FEETECH_CLOSED_FLOOR,
     PINGTI_FOLLOWER_MOTORS,
     PINGTI_JOINT_TO_FOLLOWER_MOTORS,
     PINGTI_PHYSICAL_MOTOR_COUNT,
@@ -61,10 +63,26 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--steps", type=int, default=0, help="Finite steps. 0 = run until Ctrl+C (hardware).")
     parser.add_argument("--hz", type=float, default=30.0, help="Loop rate. 0 disables sleep.")
     parser.add_argument("--log_every", type=int, default=1)
+    parser.add_argument(
+        "--disable_pingti_torque",
+        action="store_true",
+        help="Write Torque_Enable=0 on PingTi ids 1–8 and exit. Stop any teleop that holds the port first.",
+    )
     return parser.parse_args(argv)
 
 
 def run_from_args(args: argparse.Namespace) -> int:
+    if args.disable_pingti_torque:
+        from isaac_so_arm101.devices.pingti import disable_pingti_torque_raw
+
+        port = args.pingti_port or "/dev/ttyACM1"
+        torque = disable_pingti_torque_raw(port)
+        bad = [mid for mid, val in torque.items() if int(val) != 0]
+        if bad:
+            print(f"[teleop_hw] PingTi torque still on ids={bad} port={port}", flush=True)
+            return 1
+        print(f"[teleop_hw] PingTi torque off port={port} ids={sorted(torque)}", flush=True)
+        return 0
     mock = bool(args.mock)
     steps = int(args.steps)
     if mock and steps < 1:
@@ -87,6 +105,7 @@ def run_from_args(args: argparse.Namespace) -> int:
             )
             leader = ScriptedSO101Leader(_scripted_isolation_frames())
             pingti = open_pingti_follower(port="mock", mock=True)
+            atexit.register(pingti.close)
             so101 = open_so101_follower(port="mock", mock=True)
         else:
             require_distinct_serial_ports(args.port, args.follower_port, args.pingti_port)
@@ -102,6 +121,7 @@ def run_from_args(args: argparse.Namespace) -> int:
                 recalibrate=args.recalibrate,
                 mock=False,
             )
+            atexit.register(pingti.close)
             if args.follower_port:
                 so101 = open_so101_follower(
                     port=args.follower_port,
@@ -123,7 +143,7 @@ def run_from_args(args: argparse.Namespace) -> int:
             print("[teleop_hw] PASS mock SO101 leader → PingTi 8-motor + SO101 follower", flush=True)
         return 0
     except KeyboardInterrupt:
-        print("[teleop_hw] interrupted", flush=True)
+        print("[teleop_hw] interrupted; disabling PingTi torque", flush=True)
         return 0
     finally:
         for session in (pingti, so101, leader):
@@ -173,7 +193,13 @@ def _assert_mock_isolation(result) -> None:
                 continue
             for other in other_motors:
                 val = pingti[f"{other}.pos"]
-                if abs(val) > 1e-6:
+                if other == "gripper":
+                    if abs(val - GRIPPER_FEETECH_CLOSED_FLOOR) > 1e-5:
+                        raise SystemExit(
+                            f"[teleop_hw] FAIL: {motor} leaked to gripper={val} "
+                            f"(closed floor={GRIPPER_FEETECH_CLOSED_FLOOR})"
+                        )
+                elif abs(val) > 1e-6:
                     raise SystemExit(f"[teleop_hw] FAIL: {motor} leaked to {other}={val}")
         for so_motor in SO101_LEADER_MOTORS:
             val = so101[f"{so_motor}.pos"]

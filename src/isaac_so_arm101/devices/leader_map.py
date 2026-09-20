@@ -8,7 +8,10 @@ radians in ``PINGTI_JOINTS`` order (arm then gripper).
 
 from __future__ import annotations
 
+import math
+
 from isaac_so_arm101.teleop_constants import (
+    GRIPPER_FEETECH_CLOSED_FLOOR,
     PINGTI_FOLLOWER_MOTORS,
     PINGTI_GRIPPER_JOINT,
     PINGTI_JOINT_LIMITS_RAD,
@@ -17,6 +20,7 @@ from isaac_so_arm101.teleop_constants import (
     SO101_LEADER_ARM_RANGE,
     SO101_LEADER_GRIPPER_RANGE,
     SO101_LEADER_MOTORS,
+    SO101_PINGTI_SIGN,
     SO101_TO_PINGTI,
 )
 
@@ -84,7 +88,11 @@ def leader_state_hold(values: dict[str, float] | None = None) -> dict[str, float
 
 
 def pingti_joint_pos_from_leader(state: dict[str, float]) -> tuple[float, ...]:
-    """Return 6 PingTi joint targets (rad) in ``PINGTI_JOINTS`` order."""
+    """Return 6 PingTi joint targets (rad) in ``PINGTI_JOINTS`` order.
+
+    Arm joints apply ``SO101_PINGTI_SIGN`` then clip to URDF limits so a
+    reversed leader axis cannot command past the PingTi stop.
+    """
     motors = strip_leader_keys(state)
     missing = [name for name in SO101_LEADER_MOTORS if name not in motors]
     if missing:
@@ -94,14 +102,44 @@ def pingti_joint_pos_from_leader(state: dict[str, float]) -> tuple[float, ...]:
         pingti = SO101_TO_PINGTI[motor]
         lo, hi = PINGTI_JOINT_LIMITS_RAD[pingti]
         raw = motors[motor]
+        sign = SO101_PINGTI_SIGN[motor]
         if pingti == PINGTI_GRIPPER_JOINT:
             mapped = map_gripper_0_100(raw, lo, hi)
         else:
-            mapped = map_signed_m100(raw, lo, hi)
+            mapped = sign * map_signed_m100(raw, lo, hi)
         targets.append(_clip(mapped, lo, hi))
     if tuple(SO101_TO_PINGTI[m] for m in SO101_LEADER_MOTORS) != PINGTI_JOINTS:
         raise RuntimeError("SO101_TO_PINGTI order drifted from PINGTI_JOINTS")
     return tuple(targets)
+
+
+def pingti_named_joints_from_leader(state: dict[str, float]) -> dict[str, float]:
+    """Leader dict → ``{pingti_joint: rad}`` (already clipped to URDF limits)."""
+    return {name: value for name, value in zip(PINGTI_JOINTS, pingti_joint_pos_from_leader(state), strict=True)}
+
+
+def _unclipped_mapped_rad(motor: str, raw: float) -> float:
+    pingti = SO101_TO_PINGTI[motor]
+    lo, hi = PINGTI_JOINT_LIMITS_RAD[pingti]
+    sign = SO101_PINGTI_SIGN[motor]
+    if pingti == PINGTI_GRIPPER_JOINT:
+        return map_gripper_0_100(raw, lo, hi)
+    return sign * map_signed_m100(raw, lo, hi)
+
+
+def clipped_joint_report(state: dict[str, float], atol: float = 1e-5) -> list[str]:
+    """PingTi joints whose signed leader map is outside the URDF stop."""
+    motors = strip_leader_keys(state)
+    over: list[str] = []
+    for motor in SO101_LEADER_MOTORS:
+        if motor not in motors:
+            continue
+        pingti = SO101_TO_PINGTI[motor]
+        lo, hi = PINGTI_JOINT_LIMITS_RAD[pingti]
+        unclipped = _unclipped_mapped_rad(motor, motors[motor])
+        if unclipped < lo - atol or unclipped > hi + atol:
+            over.append(pingti)
+    return over
 
 
 def leader_action_from_state(state: dict[str, float]) -> dict[str, float]:
@@ -111,6 +149,11 @@ def leader_action_from_state(state: dict[str, float]) -> dict[str, float]:
     if missing:
         raise KeyError(f"leader state missing motors {missing}; got {sorted(motors)}")
     return {f"{name}.pos": float(motors[name]) for name in SO101_LEADER_MOTORS}
+
+
+def clamp_gripper_feetech(value: float) -> float:
+    """Keep PingTi gripper Goal off the 0–4095 calibration extreme (closed stop)."""
+    return _clip(float(value), GRIPPER_FEETECH_CLOSED_FLOOR, SO101_LEADER_GRIPPER_RANGE[1])
 
 
 def pingti_follower_action_from_leader(state: dict[str, float]) -> dict[str, float]:
@@ -133,18 +176,63 @@ def pingti_follower_action_from_leader(state: dict[str, float]) -> dict[str, flo
     return action
 
 
+def urdf_rad_to_feetech_m100(rad: float) -> float:
+    """Sim/URDF radians → Feetech RANGE_M100_100.
+
+    Seeded PingTi calibration is range 0–4095, so LeRobot ±100 is a half turn
+    (±π rad), not the URDF stop. Mapping through URDF limits sent ~2× the pan
+    command (limit ±π/2 vs motor ±π) and the real pan/roll overshot sim and the
+    SO-101.
+    """
+    x = float(rad) / math.pi * SO101_LEADER_ARM_RANGE[1]
+    return _clip(x, SO101_LEADER_ARM_RANGE[0], SO101_LEADER_ARM_RANGE[1])
+
+
 def pingti_follower_action_from_joints(joints: tuple[float, ...] | list[float]) -> dict[str, float]:
-    """Sim/URDF 6 rad → 8 Feetech ``{motor}.pos`` (SO101 names + mirrored duals)."""
+    """Sim/URDF 6 rad → 8 Feetech goals.
+
+    Scale is ``rad/π×100`` (calibration 0–4095). Sign undoes ``SO101_PINGTI_SIGN``
+    so the real PingTi matches the SO-101: pan/lift/elbow/wrist_flex are inverted
+    in sim to look right, but Feetech polarity matches the leader. Wrist_roll and
+    gripper are already ``+1`` and stay unchanged.
+    """
     if len(joints) != len(PINGTI_JOINTS):
         raise ValueError(f"expected {len(PINGTI_JOINTS)} PingTi joints, got {len(joints)}")
     state: dict[str, float] = {}
     for motor, joint, rad in zip(SO101_LEADER_MOTORS, PINGTI_JOINTS, joints, strict=True):
         lo, hi = PINGTI_JOINT_LIMITS_RAD[joint]
         if joint == PINGTI_GRIPPER_JOINT:
-            state[motor] = rad_to_gripper_0_100(rad, lo, hi)
+            state[motor] = clamp_gripper_feetech(rad_to_gripper_0_100(rad, lo, hi))
         else:
-            state[motor] = rad_to_signed_m100(rad, lo, hi)
+            # Undo SO101_PINGTI_SIGN: sim rad is already flipped for those axes.
+            state[motor] = SO101_PINGTI_SIGN[motor] * urdf_rad_to_feetech_m100(rad)
     return pingti_follower_action_from_leader(state)
+
+
+def follow_error_report(
+    joints: tuple[float, ...] | list[float],
+    present: dict[str, float],
+    goal: dict[str, float] | None = None,
+) -> list[str]:
+    """Compare sim-mapped Feetech targets to real Present/Goal (normalized ±100 / 0–100)."""
+    desired = pingti_follower_action_from_joints(joints)
+    lines: list[str] = []
+    for motor in PINGTI_FOLLOWER_MOTORS:
+        des = desired.get(f"{motor}.pos")
+        pre = present.get(motor)
+        gol = (goal or {}).get(motor)
+        err = None
+        if des is not None and pre is not None:
+            err = float(pre) - float(des)
+        des_s = f"{float(des):.2f}" if des is not None else "na"
+        pre_s = f"{float(pre):.2f}" if pre is not None else "na"
+        gol_s = f"{float(gol):.2f}" if gol is not None else "na"
+        err_s = f"{err:+.2f}" if err is not None else "na"
+        lines.append(
+            f"[teleop_hw] compare motor={motor} desired={des_s} goal={gol_s} "
+            f"present={pre_s} present_minus_desired={err_s}"
+        )
+    return lines
 
 
 def joints6_from_named(positions: dict[str, float]) -> tuple[float, ...]:

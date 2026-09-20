@@ -9,6 +9,7 @@ from pathlib import Path
 
 from isaac_so_arm101.assets import (
     FETCH_HINT,
+    STALE_KIT_RENDER_PRIM,
     AssetNotFoundError,
     ENV_ASSETS,
     LAB_ABSOLUTE_PREFIXES,
@@ -107,6 +108,11 @@ class AssetResolverTests(unittest.TestCase):
                 self.assertEqual(require_hdri_dir().resolve(), hdri.resolve())
                 digest = hash_directory(scene)
                 self.assertEqual(len(digest), 64)
+                (scene / ".gitkeep").write_bytes(b"hidden")
+                hidden = scene / ".cache" / "huggingface"
+                hidden.mkdir(parents=True)
+                (hidden / "meta").write_bytes(b"skip")
+                self.assertEqual(hash_directory(scene), digest)
             finally:
                 os.environ.pop(ENV_ASSETS, None)
 
@@ -126,6 +132,14 @@ class AssetResolverTests(unittest.TestCase):
             if any(ref.startswith(prefix) for prefix in LAB_ABSOLUTE_PREFIXES)
         ]
         self.assertEqual(leftover, [])
+        try:
+            from pxr import Usd
+        except ImportError:
+            return
+        stage = Usd.Stage.Open(str(usd), Usd.Stage.LoadNone)
+        render = stage.GetPrimAtPath(STALE_KIT_RENDER_PRIM)
+        if render and render.IsValid():
+            self.assertFalse(render.IsActive(), msg="stale /Render must be deactivated to avoid a black Kit viewport")
 
     def test_local_palm_pack_reports_missing_simpler_world(self):
         usd = find_scene_usd("palm_environment")

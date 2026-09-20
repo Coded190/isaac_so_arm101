@@ -26,6 +26,7 @@ SO-ARM101 leader (6-D joint position, optional real followers):
 from __future__ import annotations
 
 import argparse
+import atexit
 import sys
 
 from isaaclab.app import AppLauncher
@@ -48,6 +49,12 @@ parser.add_argument(
 parser.add_argument("--sensitivity", type=float, default=1.0, help="Scale Se3Keyboard pos/rot sensitivity.")
 parser.add_argument("--log_every", type=int, default=60, help="Print [teleop] telemetry every N steps.")
 parser.add_argument(
+    "--dir_log",
+    type=str,
+    default="logs/teleop_joint_dir.log",
+    help="Append [teleop_dir] leader vs sim joint deltas (also printed). grep teleop_dir.",
+)
+parser.add_argument(
     "--teleop_device",
     choices=["keyboard", "so101leader"],
     default="keyboard",
@@ -64,7 +71,13 @@ parser.add_argument(
     "--pingti_port",
     type=str,
     default=None,
-    help="Optional real PingTi follower. After each sim step, 6 joint targets expand to 8 Feetech motors.",
+    help="Optional real PingTi follower. Holds present until N (or J) in the Kit viewport, then slowly follows sim.",
+)
+parser.add_argument(
+    "--pingti_follow",
+    action="store_true",
+    default=False,
+    help="Start slewing the real PingTi toward sim after connect (still capped). Default is hold present until N.",
 )
 parser.add_argument("--leader_id", type=str, default="so101_leader", help="LeRobot calibration id for the leader.")
 parser.add_argument("--follower_id", type=str, default="so101_follower", help="LeRobot calibration id for the follower.")
@@ -85,10 +98,27 @@ parser.add_argument(
     action="store_true",
     help="Record PingTi 8-motor send_action without serial (keyboard or so101leader).",
 )
+parser.add_argument(
+    "--disable_pingti_torque",
+    action="store_true",
+    help="Write Torque_Enable=0 on PingTi ids 1–8 and exit (no Kit). Stop any teleop that holds the port first.",
+)
 AppLauncher.add_app_launcher_args(parser)
 # Lab 3.0: omit --viz and AppLauncher goes headless. Se3Keyboard needs Kit.
 parser.set_defaults(visualizer=["kit"])
 args_cli = parser.parse_args()
+
+if args_cli.disable_pingti_torque:
+    from isaac_so_arm101.devices.pingti import disable_pingti_torque_raw
+
+    port = args_cli.pingti_port or "/dev/ttyACM1"
+    torque = disable_pingti_torque_raw(port)
+    bad = [mid for mid, val in torque.items() if int(val) != 0]
+    if bad:
+        print(f"[teleop] PingTi torque still on ids={bad} port={port}", flush=True)
+        sys.exit(1)
+    print(f"[teleop] PingTi torque off port={port} ids={sorted(torque)}", flush=True)
+    sys.exit(0)
 
 _viz_raw = getattr(args_cli, "visualizer", None)
 if isinstance(_viz_raw, str):
@@ -132,16 +162,60 @@ if args_cli.mock_follower and args_cli.teleop_device != "so101leader":
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
+import time  # noqa: E402
+
 import gymnasium as gym  # noqa: E402
 import torch  # noqa: E402
 
 import isaac_so_arm101.tasks  # noqa: E402, F401
 from isaaclab.devices import Se3Keyboard, Se3KeyboardCfg  # noqa: E402
 from isaaclab_tasks.utils import parse_env_cfg  # noqa: E402
+from isaac_so_arm101.devices.leader_map import (  # noqa: E402
+    clipped_joint_report,
+    follow_error_report,
+    pingti_named_joints_from_leader,
+)
+from isaac_so_arm101.devices.pingti import GOAL_SLEW_MAX, PINGTI_SEND_EVERY_STEPS  # noqa: E402
+
+PINGTI_FOLLOW_ENABLE_KEYS = ("N", "J")
+PINGTI_FOLLOW_HOLD_KEYS = ("M",)
+PINGTI_FOLLOW_KEYS = PINGTI_FOLLOW_ENABLE_KEYS + PINGTI_FOLLOW_HOLD_KEYS + ("H",)
+
+
+def poll_kit_key_rising(session: dict, keys: tuple[str, ...] = PINGTI_FOLLOW_KEYS) -> tuple[str, ...]:
+    """Rising-edge Kit keys. H is Isaac Sim Hide and often never reaches Se3Keyboard."""
+    try:
+        import carb
+        import omni
+
+        iface = carb.input.acquire_input_interface()
+        keyboard = omni.appwindow.get_default_app_window().get_keyboard()
+        keyboard_input = carb.input.KeyboardInput
+    except Exception:
+        return ()
+    down: list[str] = []
+    for name in keys:
+        key = getattr(keyboard_input, name, None)
+        if key is None:
+            continue
+        try:
+            if iface.get_keyboard_value(keyboard, key):
+                down.append(name)
+        except Exception:
+            continue
+    prev = session.get("follow_keys_down")
+    if not isinstance(prev, set):
+        prev = set()
+    now = set(down)
+    session["follow_keys_down"] = now
+    return tuple(sorted(now - prev))
+from isaac_so_arm101.devices.dir_log import JointDirLogger, emit_hw_lines  # noqa: E402
 from isaac_so_arm101.teleop_constants import (  # noqa: E402
     JOINT_POS_ACTION_DIM,
     PINGTI_EE_BODY,
+    PINGTI_JOINTS,
     SE3_ACTION_DIM,
+    SO101_PINGTI_SIGN,
 )
 from isaac_so_arm101.tasks.teleop.teleop_env_cfg import apply_teleop_device  # noqa: E402
 from isaac_so_arm101.teleop_root import (  # noqa: E402
@@ -169,11 +243,85 @@ def _print_bake_pose(prim) -> None:
     )
 
 
+def _frame_kit_camera(env, env_cfg) -> None:
+    """Point the Kit viewport at the teleop viewer eye/lookat (not origin)."""
+    eye = tuple(float(v) for v in env_cfg.viewer.eye)
+    lookat = tuple(float(v) for v in env_cfg.viewer.lookat)
+    sim = getattr(env.unwrapped, "sim", None)
+    setter = getattr(sim, "set_camera_view", None) if sim is not None else None
+    if callable(setter):
+        setter(eye, lookat)
+        print(f"[teleop] kit camera eye={eye} lookat={lookat}", flush=True)
+        return
+    print("[teleop] env.sim.set_camera_view unavailable; Kit camera may stay at origin", flush=True)
+
+
+def _log_dome_light(stage, light_prim) -> None:
+    """Log garden HDRI bind. Keep authored intensity (1000); do not boost."""
+    if light_prim is None or not light_prim.IsValid():
+        print("[teleop] garden DomeLight missing; relying on /World/light fallback", flush=True)
+        return
+    try:
+        from pxr import UsdLux
+    except ImportError:
+        return
+    if not light_prim.IsA(UsdLux.DomeLight):
+        print(f"[teleop] {light_prim.GetPath()} is not a DomeLight", flush=True)
+        return
+    dome = UsdLux.DomeLight(light_prim)
+    tex = dome.GetTextureFileAttr().Get()
+    tex_path = getattr(tex, "resolvedPath", None) or getattr(tex, "path", None) or tex
+    intensity = dome.GetIntensityAttr().Get()
+    if intensity is not None and float(intensity) > 1000.0:
+        dome.GetIntensityAttr().Set(1000.0)
+        print(f"[teleop] dome_light_tex={tex_path} intensity={intensity} -> 1000", flush=True)
+        return
+    print(f"[teleop] dome_light_tex={tex_path} intensity={intensity}", flush=True)
+
+
 def _ee_pose_str(env) -> str:
     robot = env.unwrapped.scene["robot"]
     body_ids, _ = robot.find_bodies(PINGTI_EE_BODY)
     pos = robot.data.body_pos_w[0, body_ids[0]].detach()
     return f"ee_pos=({pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f})"
+
+
+def _snap_sim_to_leader(env, leader) -> None:
+    """Write the live leader pose into sim, clipped to PingTi URDF limits."""
+    if leader is None:
+        return
+    try:
+        raw = leader.get_action()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[teleop] snap_to_leader_failed err={exc!r}", flush=True)
+        return
+    if not isinstance(raw, dict):
+        print("[teleop] snap_to_leader_skipped reason=no_leader_action", flush=True)
+        return
+    try:
+        named = pingti_named_joints_from_leader(raw)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[teleop] snap_to_leader_failed err={exc!r}", flush=True)
+        return
+    robot = env.unwrapped.scene["robot"]
+    q = robot.data.joint_pos.clone()
+    names = list(robot.joint_names)
+    missing = [name for name in PINGTI_JOINTS if name not in names]
+    if missing:
+        print(f"[teleop] snap_to_leader_failed missing_joints={missing}", flush=True)
+        return
+    for name, value in named.items():
+        q[:, names.index(name)] = float(value)
+    robot.write_joint_state_to_sim(q, torch.zeros_like(q))
+    setter = getattr(robot, "set_joint_position_target", None)
+    if callable(setter):
+        setter(q)
+    clipped = clipped_joint_report(raw)
+    print(
+        f"[teleop] snap_to_leader q={[round(named[n], 4) for n in PINGTI_JOINTS]} "
+        f"clipped={clipped}",
+        flush=True,
+    )
 
 
 def main():
@@ -185,6 +333,24 @@ def main():
         args_cli.follower_port if not args_cli.mock_follower else None,
         args_cli.pingti_port if not args_cli.mock_pingti else None,
     )
+    if args_cli.pingti_port and not args_cli.mock_pingti:
+        from isaac_so_arm101.devices.so101 import read_feetech_bus_voltages
+
+        rows = read_feetech_bus_voltages(args_cli.pingti_port, motor_ids=range(1, 9))
+        found = [mid for mid, _volt, _err in rows]
+        print(
+            f"[teleop] PingTi preflight port={args_cli.pingti_port} "
+            f"found_ids={found} "
+            + " ".join(f"id{mid}={volt:.1f}V" for mid, volt, _err in rows),
+            flush=True,
+        )
+        missing = [mid for mid in range(1, 9) if mid not in found]
+        if missing:
+            raise SystemExit(
+                f"[teleop] PingTi missing motor ids {missing} on {args_cli.pingti_port} "
+                f"(need 1-8: pan, dual lift, dual elbow, wrist_flex, wrist_roll, gripper). "
+                "Check 12 V supply to the lower arm / daisy-chain. Refusing partial bus."
+            )
     env_cfg = parse_env_cfg(
         args_cli.task,
         device=args_cli.device,
@@ -201,15 +367,19 @@ def main():
     print("[teleop] Click the Isaac Sim viewport so keyboard events go to the sim, not the terminal.")
     if use_leader:
         print(
-            "[teleop] SO101 leader drives PingTi joints. Keys still: R reset env, P print bake pose. "
+            "[teleop] SO101 leader drives PingTi joints. Keys: R reset+snap sim to leader, "
+            "N/J enable real PingTi follow, M hold (H is Isaac Sim Hide), P print bake pose. "
             f"leader_port={args_cli.port} follower_port={args_cli.follower_port} "
             f"pingti_port={args_cli.pingti_port} mock_leader={args_cli.mock_leader} "
-            f"mock_follower={args_cli.mock_follower} mock_pingti={args_cli.mock_pingti}"
+            f"mock_follower={args_cli.mock_follower} mock_pingti={args_cli.mock_pingti} "
+            f"signs={ {m: SO101_PINGTI_SIGN[m] for m in SO101_PINGTI_SIGN} } "
+            f"dir_log={args_cli.dir_log}"
         )
     else:
         print(
             "[teleop] Keys: W/S x, A/D y, Q/E z, Z/X roll, T/G pitch, C/V yaw, "
-            "K gripper, R reset env, L clear keyboard deltas, P print bake pose. "
+            "K gripper, R reset env, L clear keyboard deltas, P print bake pose, "
+            "N/J real PingTi follow/hold. "
             f"pingti_port={args_cli.pingti_port} mock_pingti={args_cli.mock_pingti}"
         )
     print(
@@ -229,10 +399,31 @@ def main():
     )
     print(teleop)
 
+    session = {
+        "leader": None,
+        "pingti_follow": False,
+        "follow_keys_down": set(),
+        "follow_toggle_at": 0.0,
+        "pingti_send_now": False,
+    }
+
     def _reset():
         print("[teleop] reset")
         env.reset()
         teleop.reset()
+        _snap_sim_to_leader(env, session["leader"])
+        if session["pingti_follow"]:
+            print(
+                "[teleop] snap_to_leader sim only; real PingTi will slew toward that pose "
+                f"(follow=ON, not a jump)",
+                flush=True,
+            )
+        else:
+            print(
+                "[teleop] snap_to_leader sim only; real PingTi still holding present "
+                "(press N to follow slowly)",
+                flush=True,
+            )
 
     teleop.add_callback("R", _reset)
     env.reset()
@@ -269,6 +460,8 @@ def main():
             print(format_root_diag(root_sync.apply(robot, robot_prim)), flush=True)
         except Exception as exc:  # noqa: BLE001
             print(f"[teleop] USD root sync failed at startup: {exc}", flush=True)
+        _frame_kit_camera(env, env_cfg)
+        _log_dome_light(stage, light)
     except Exception as exc:  # noqa: BLE001 — dump is diagnostic only
         print(f"[teleop] prim dump skipped: {exc}", flush=True)
 
@@ -280,6 +473,7 @@ def main():
     leader = None
     follower = None
     pingti = None
+    dir_log = None
     step = 0
     try:
         if use_leader:
@@ -295,6 +489,9 @@ def main():
                 recalibrate=args_cli.recalibrate,
                 mock=args_cli.mock_leader,
             )
+            session["leader"] = leader
+            _snap_sim_to_leader(env, leader)
+            dir_log = JointDirLogger(args_cli.dir_log)
             if args_cli.follower_port or args_cli.mock_follower:
                 follower = open_so101_follower(
                     port=args_cli.follower_port or "mock",
@@ -312,9 +509,55 @@ def main():
                 recalibrate=args_cli.recalibrate,
                 mock=args_cli.mock_pingti or not args_cli.pingti_port,
             )
+            atexit.register(pingti.close)
+            print(
+                f"[teleop] PingTi holding present. Press N (or J) in the Isaac Sim viewport to slowly "
+                f"follow sim. H is Kit Hide and will not arm follow. Press N again to hold. "
+                f"slew_max={GOAL_SLEW_MAX} send_every={PINGTI_SEND_EVERY_STEPS}. "
+                "Do not expect the real arm to move until N. "
+                "Ctrl+C or closing Kit disables PingTi torque so the arm goes limp. "
+                "Grep pingti_follow=ON / sent= / PingTi shutdown in the terminal.",
+                flush=True,
+            )
+            if args_cli.pingti_follow:
+                session["pingti_follow"] = True
+                session["pingti_send_now"] = True
+                print(
+                    f"[teleop] pingti_follow=ON at start (--pingti_follow) slew_max={GOAL_SLEW_MAX}",
+                    flush=True,
+                )
+
+        def _set_pingti_follow(on: bool):
+            if pingti is None:
+                print("[teleop] pingti_follow ignored (no --pingti_port / --mock_pingti)", flush=True)
+                return
+            now = time.monotonic()
+            if now - float(session.get("follow_toggle_at", 0.0)) < 0.25 and session["pingti_follow"] == on:
+                return
+            session["follow_toggle_at"] = now
+            session["pingti_follow"] = bool(on)
+            if session["pingti_follow"]:
+                session["pingti_send_now"] = True
+            state = "ON" if session["pingti_follow"] else "HOLD"
+            print(
+                f"[teleop] pingti_follow={state} slew_max={GOAL_SLEW_MAX} "
+                "(N/J enable follow, M hold; slew from Present so Goal cannot walk away)",
+                flush=True,
+            )
+
+        for _key in PINGTI_FOLLOW_ENABLE_KEYS:
+            teleop.add_callback(_key, lambda: _set_pingti_follow(True))
+        for _key in PINGTI_FOLLOW_HOLD_KEYS:
+            teleop.add_callback(_key, lambda: _set_pingti_follow(False))
 
         while simulation_app.is_running():
             with torch.inference_mode():
+                rising = poll_kit_key_rising(session)
+                if any(k in PINGTI_FOLLOW_HOLD_KEYS for k in rising):
+                    _set_pingti_follow(False)
+                elif any(k in PINGTI_FOLLOW_ENABLE_KEYS for k in rising):
+                    _set_pingti_follow(True)
+                raw = None
                 if use_leader:
                     teleop.advance()
                     raw = leader.get_action()
@@ -354,24 +597,94 @@ def main():
                         )
                         continue
                     raise
-                if pingti is not None:
-                    send_sim_joints_to_pingti(robot, pingti)
+                pingti_action = None
+                send_now = bool(session.pop("pingti_send_now", False))
+                if pingti is not None and session["pingti_follow"] and (
+                    send_now or step % PINGTI_SEND_EVERY_STEPS == 0
+                ):
+                    try:
+                        pingti_action = send_sim_joints_to_pingti(robot, pingti)
+                    except Exception as exc:  # noqa: BLE001
+                        print(f"[teleop_hw] send_failed step={step} err={exc!r}", flush=True)
                 try:
                     root_sync.sync_visual_scale(robot_prim, robot)
                 except Exception as exc:  # noqa: BLE001
                     if step < 5:
                         print(f"[teleop] fabric scale sync failed step={step}: {exc}", flush=True)
                 step += 1
+                if dir_log is not None and raw is not None:
+                    robot = env.unwrapped.scene["robot"]
+                    names = list(robot.joint_names)
+                    pos = robot.data.joint_pos[0].detach().cpu()
+                    meas = {name: float(pos[i]) for i, name in enumerate(names)}
+                    force = args_cli.log_every > 0 and step % args_cli.log_every == 0
+                    dir_log.step(
+                        step=step,
+                        raw_leader=raw,
+                        sim_cmd=tuple(float(x) for x in cmd.detach().cpu().tolist()),
+                        sim_meas=meas,
+                        pingti_action=pingti_action,
+                        force=force,
+                    )
+                want_hw = pingti is not None and (
+                    args_cli.log_every > 0 and step % args_cli.log_every == 0
+                )
+                if want_hw:
+                    snap = None
+                    try:
+                        snap = pingti.hw_snapshot()
+                    except Exception as exc:  # noqa: BLE001
+                        print(f"[teleop_hw] snapshot_failed step={step} err={exc!r}", flush=True)
+                    else:
+                        if snap is not None and any(int(v) != 1 for v in snap.get("torque", {}).values()):
+                            off = [n for n, v in snap["torque"].items() if int(v) != 1]
+                            print(
+                                f"[teleop_hw] step={step} torque_off motors={off} "
+                                "holding_present_then_enable",
+                                flush=True,
+                            )
+                            pingti.ensure_torque_on()
+                            snap = pingti.hw_snapshot()
+                    emit_hw_lines(
+                        step=step,
+                        pingti_action=pingti_action,
+                        snap=snap,
+                        logger=dir_log,
+                    )
+                    if snap is not None:
+                        try:
+                            robot = env.unwrapped.scene["robot"]
+                            named = {n: float(robot.data.joint_pos[0][i].detach()) for i, n in enumerate(robot.joint_names)}
+                            from isaac_so_arm101.devices.leader_map import joints6_from_named
+
+                            for line in follow_error_report(
+                                joints6_from_named(named),
+                                snap.get("present") or {},
+                                snap.get("goal") or {},
+                            ):
+                                if dir_log is not None:
+                                    dir_log.emit(line)
+                                else:
+                                    print(line, flush=True)
+                        except Exception as exc:  # noqa: BLE001
+                            print(f"[teleop_hw] compare_failed step={step} err={exc!r}", flush=True)
                 if args_cli.log_every > 0 and step % args_cli.log_every == 0:
                     robot = env.unwrapped.scene["robot"]
                     joints = robot.data.joint_pos[0].detach()
                     print(
-                        f"[teleop] step={step} action={ [round(x, 4) for x in cmd.tolist()] } "
+                        f"[teleop] step={step} pingti_follow={'ON' if session['pingti_follow'] else 'HOLD'} "
+                        f"pingti_sent={'yes' if pingti_action else 'no'} "
+                        f"action={ [round(x, 4) for x in cmd.tolist()] } "
                         f"{_ee_pose_str(env)} joints={ [round(x, 3) for x in joints.tolist()] }"
                     )
                     if sync_info is not None:
                         print(format_root_diag(sync_info, step=step), flush=True)
+    except KeyboardInterrupt:
+        print("[teleop] interrupted (Ctrl+C); disabling PingTi torque", flush=True)
     finally:
+        print("[teleop] stopping; PingTi torque off", flush=True)
+        if dir_log is not None:
+            dir_log.close()
         if pingti is not None:
             pingti.close()
         if follower is not None:

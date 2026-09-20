@@ -6,11 +6,45 @@ at module load; hardware is opened only for ``--teleop_device so101leader``.
 
 from __future__ import annotations
 
+import builtins
 import importlib
+import sys
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Iterator, Protocol
 
 from isaac_so_arm101.teleop_constants import SO101_LEADER_MOTORS
+
+# STS3215 operating window (0.1 V register units → volts). Leader supplies
+# are typically 5–7.4 V. Above ~14 V sets Feetech VIN and can cook motors.
+# Do NOT ignore VIN status — refuse the bus instead.
+FEETECH_VIN_ERROR_BIT = 1
+FEETECH_VOLTAGE_MIN_V = 4.5
+FEETECH_VOLTAGE_MAX_V = 14.0
+_FEETECH_PRESENT_VOLTAGE_ADDR = 62
+
+
+@contextmanager
+def _noninteractive_calibration_input() -> Iterator[None]:
+    """If stdin is not a TTY, accept a loaded calibration JSON (do not type ``c``)."""
+    if sys.stdin.isatty():
+        yield
+        return
+    original = builtins.input
+
+    def _input(prompt: object = "") -> str:
+        print(prompt, end="", flush=True)
+        print(
+            "[teleop] stdin is not a TTY; using loaded calibration file (not recalibrating)",
+            flush=True,
+        )
+        return ""
+
+    builtins.input = _input
+    try:
+        yield
+    finally:
+        builtins.input = original
 
 LEROBOT_INSTALL_HINT = (
     "LeRobot is required for --teleop_device so101leader (not in the default uv lock).\n"
@@ -165,7 +199,76 @@ def _make_config(
     raise TypeError(f"could not construct {cfg_cls}: {last_exc}") from last_exc
 
 
-def connect_lerobot_device(device: Any, *, port: str, label: str, recalibrate: bool = False) -> None:
+def read_feetech_bus_voltages(
+    port: str, motor_ids: range | list[int] | None = None
+) -> list[tuple[int, float, int]]:
+    """Return ``(id, volts, error_status)`` for each pingable motor. Closes the port."""
+    if motor_ids is None:
+        motor_ids = range(1, 7)
+    try:
+        from scservo_sdk import PortHandler, PacketHandler
+    except ImportError as exc:
+        raise SystemExit(
+            f"[teleop] scservo_sdk is required to check Feetech bus voltage on {port}. "
+            "Install with `uv pip install 'lerobot[feetech]'`."
+        ) from exc
+
+    handler = PortHandler(port)
+    if not handler.openPort():
+        raise SystemExit(f"[teleop] could not open {port} to read motor voltage")
+    try:
+        if not handler.setBaudRate(1_000_000):
+            raise SystemExit(f"[teleop] could not set 1 Mbps on {port}")
+        packet = PacketHandler(0)
+        rows: list[tuple[int, float, int]] = []
+        for motor_id in motor_ids:
+            _model, comm, err = packet.ping(handler, motor_id)
+            if comm != 0:
+                continue
+            raw, comm_v, _err_v = packet.read1ByteTxRx(handler, motor_id, _FEETECH_PRESENT_VOLTAGE_ADDR)
+            if comm_v != 0:
+                continue
+            rows.append((int(motor_id), float(raw) / 10.0, int(err)))
+        return rows
+    finally:
+        handler.closePort()
+
+
+def assert_feetech_bus_voltage_ok(
+    port: str, label: str, motor_ids: range | list[int] | None = None
+) -> None:
+    """Refuse connect if VIN is set or voltage is outside the STS3215 window.
+
+    This is a safety interlock. A 15 V adapter previously set VIN on every
+    motor; ignoring that bit would keep teleop running on an overloaded bus.
+    """
+    rows = read_feetech_bus_voltages(port, motor_ids=motor_ids)
+    if not rows:
+        raise SystemExit(
+            f"[teleop] {label} voltage preflight found no STS motors on {port}. "
+            "Check USB, 1 Mbps bus, and motor power."
+        )
+    vin_ids = [mid for mid, _volt, err in rows if err & FEETECH_VIN_ERROR_BIT]
+    oos = [(mid, volt) for mid, volt, _err in rows if volt < FEETECH_VOLTAGE_MIN_V or volt > FEETECH_VOLTAGE_MAX_V]
+    summary = " ".join(f"id{mid}={volt:.1f}V" for mid, volt, _err in rows)
+    print(f"[teleop] {label} bus voltage {summary}", flush=True)
+    if vin_ids or oos:
+        raise SystemExit(
+            f"[teleop] {label} REFUSING connect: Feetech VIN/over-voltage on {port}. "
+            f"vin_ids={vin_ids} out_of_spec={oos} "
+            f"allowed=[{FEETECH_VOLTAGE_MIN_V:.1f}, {FEETECH_VOLTAGE_MAX_V:.1f}] V. "
+            "Supply must be inside the STS window (not an unregulated 15 V adapter)."
+        )
+
+
+def connect_lerobot_device(
+    device: Any,
+    *,
+    port: str,
+    label: str,
+    recalibrate: bool = False,
+    motor_ids: range | list[int] | None = None,
+) -> None:
     """Use LeRobot's connect/calibrate path. Do not skip calibration.
 
     ``connect(calibrate=True)`` is what SOLeader/SOFollower expect: handshake the
@@ -179,7 +282,9 @@ def connect_lerobot_device(device: Any, *, port: str, label: str, recalibrate: b
         raise SystemExit(f"[teleop] LeRobot {label} has no connect()")
     log_calibration_file(device, label)
     print(f"[teleop] connecting {label} port={port} id={getattr(device, 'id', None)}", flush=True)
-    connect(calibrate=True)
+    assert_feetech_bus_voltage_ok(port, label, motor_ids=motor_ids)
+    with _noninteractive_calibration_input():
+        connect(calibrate=True)
     if recalibrate:
         calibrate = getattr(device, "calibrate", None)
         if not callable(calibrate):

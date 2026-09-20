@@ -51,8 +51,24 @@ SO101_TO_PINGTI = {
     "wrist_roll": "wrist_roll",
     "gripper": "gripper_moving",
 }
+# +leader vs +PingTi URDF can be mechanically opposite. Flip so the sim
+# arm moves the same way as the real SO101. Gripper stays 0=closed → URDF lo.
+SO101_PINGTI_SIGN = {
+    "shoulder_pan": -1.0,
+    "shoulder_lift": -1.0,
+    "elbow_flex": -1.0,
+    "wrist_flex": -1.0,
+    "wrist_roll": 1.0,
+    "gripper": 1.0,
+}
 SO101_LEADER_ARM_RANGE = (-100.0, 100.0)
 SO101_LEADER_GRIPPER_RANGE = (0.0, 100.0)
+# RANGE_0_100 with seeded 0–4095 cal makes Goal=0 a full-turn extreme, past the
+# jaws-closed stop. STS3215 id 8 then stalls (Feetech Overload / err=32). Never
+# command below the floor. If Present is already in the closed band, hold it
+# instead of pulling tighter into the stop.
+GRIPPER_FEETECH_CLOSED_FLOOR = 8.0
+GRIPPER_FEETECH_CLOSED_HOLD = 15.0
 # Exact limits from PingTi_Arm_5DOF_v4_copy.urdf (radians).
 PINGTI_JOINT_LIMITS_RAD = {
     "base_yaw": (-1.5708, 1.5708),

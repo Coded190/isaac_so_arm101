@@ -109,6 +109,11 @@ class PalmTeleopSceneCfg(InteractiveSceneCfg):
         prim_path="{ENV_REGEX_NS}/Scene",
         spawn=sim_utils.UsdFileCfg(usd_path="UNSET"),
     )
+    # Low fill only so a failed HDRI bind is not black. Garden DomeLight is 1000.
+    light = AssetBaseCfg(
+        prim_path="/World/light",
+        spawn=sim_utils.DomeLightCfg(color=(0.75, 0.75, 0.75), intensity=200.0),
+    )
     robot: ArticulationCfg = MISSING
 
     def __post_init__(self):

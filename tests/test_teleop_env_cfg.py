@@ -52,6 +52,8 @@ class TeleopEnvCfgTests(unittest.TestCase):
         self.assertEqual(cfg.viewer.lookat, PINGTI_PALM_POS)
         self.assertFalse(cfg.scene.robot.spawn.fix_base)
         self.assertTrue(cfg.scene.robot.spawn.rigid_props.disable_gravity)
+        self.assertTrue(hasattr(cfg.scene, "light"))
+        self.assertEqual(cfg.scene.light.prim_path, "/World/light")
 
     def test_procedural_teleop_root_is_free(self):
         cfg = self.PingTiTeleopEnvCfg()
