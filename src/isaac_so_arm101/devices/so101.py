@@ -21,7 +21,10 @@ from isaac_so_arm101.teleop_constants import SO101_LEADER_MOTORS
 FEETECH_VIN_ERROR_BIT = 1
 FEETECH_VOLTAGE_MIN_V = 4.5
 FEETECH_VOLTAGE_MAX_V = 14.0
+FEETECH_STS3215_MODEL = 777
+FEETECH_STS3250_MODEL = 2825
 _FEETECH_PRESENT_VOLTAGE_ADDR = 62
+_FEETECH_TORQUE_ENABLE_ADDR = 40
 
 
 @contextmanager
@@ -199,39 +202,261 @@ def _make_config(
     raise TypeError(f"could not construct {cfg_cls}: {last_exc}") from last_exc
 
 
+def read_feetech_bus_probe(
+    port: str, motor_ids: range | list[int] | None = None
+) -> list[dict[str, Any]]:
+    """Ping each id. Return dicts with id/model/volts/torque/err for responders. Closes the port."""
+    if motor_ids is None:
+        motor_ids = range(1, 9)
+    try:
+        from scservo_sdk import PacketHandler, PortHandler
+    except ImportError as extra:
+        raise SystemExit(
+            f"[teleop] scservo_sdk is required to check Feetech bus on {port}. "
+            "Install with `uv pip install 'lerobot[feetech]'`."
+        ) from extra
+
+    handler = PortHandler(port)
+    if not handler.openPort():
+        raise SystemExit(f"[teleop] could not open {port} to probe Feetech bus")
+    try:
+        if not handler.setBaudRate(1_000_000):
+            raise SystemExit(f"[teleop] could not set 1 Mbps on {port}")
+        packet = PacketHandler(0)
+        rows: list[dict[str, Any]] = []
+        for motor_id in motor_ids:
+            model, comm, err = packet.ping(handler, motor_id)
+            if comm != 0:
+                continue
+            raw, comm_v, _err_v = packet.read1ByteTxRx(
+                handler, motor_id, _FEETECH_PRESENT_VOLTAGE_ADDR
+            )
+            torque_raw, comm_t, _err_t = packet.read1ByteTxRx(
+                handler, motor_id, _FEETECH_TORQUE_ENABLE_ADDR
+            )
+            rows.append(
+                {
+                    "id": int(motor_id),
+                    "model": int(model),
+                    "volts": (float(raw) / 10.0) if comm_v == 0 else None,
+                    "torque": int(torque_raw) if comm_t == 0 else None,
+                    "err": int(err),
+                }
+            )
+        return rows
+    finally:
+        handler.closePort()
+
+
 def read_feetech_bus_voltages(
     port: str, motor_ids: range | list[int] | None = None
 ) -> list[tuple[int, float, int]]:
     """Return ``(id, volts, error_status)`` for each pingable motor. Closes the port."""
     if motor_ids is None:
         motor_ids = range(1, 7)
-    try:
-        from scservo_sdk import PortHandler, PacketHandler
-    except ImportError as exc:
-        raise SystemExit(
-            f"[teleop] scservo_sdk is required to check Feetech bus voltage on {port}. "
-            "Install with `uv pip install 'lerobot[feetech]'`."
-        ) from exc
+    rows: list[tuple[int, float, int]] = []
+    for probe in read_feetech_bus_probe(port, motor_ids=motor_ids):
+        if probe["volts"] is None:
+            continue
+        rows.append((int(probe["id"]), float(probe["volts"]), int(probe["err"])))
+    return rows
 
-    handler = PortHandler(port)
-    if not handler.openPort():
-        raise SystemExit(f"[teleop] could not open {port} to read motor voltage")
+
+def classify_feetech_bus(probes: list[dict[str, Any]]) -> str:
+    """``pingti`` / ``so101`` / ``empty`` / ``partial`` from ping model table."""
+    ids = {int(row["id"]) for row in probes}
+    models = {int(row["id"]): int(row["model"]) for row in probes}
+    if not ids:
+        return "empty"
+    pingti_ids = set(range(1, 9))
+    if ids >= pingti_ids and models.get(2) == FEETECH_STS3250_MODEL and models.get(3) == FEETECH_STS3250_MODEL:
+        return "pingti"
+    so101_ids = set(range(1, 7))
+    if ids == so101_ids and all(models[mid] == FEETECH_STS3215_MODEL for mid in so101_ids):
+        return "so101"
+    return "partial"
+
+
+def format_bus_probe_line(port: str, probes: list[dict[str, Any]], *, kind: str | None = None) -> str:
+    if kind is None:
+        kind = classify_feetech_bus(probes)
+    ids = [int(row["id"]) for row in probes]
+    models = ",".join(str(int(row["model"])) for row in probes) or "none"
+    volts = ",".join("na" if row["volts"] is None else f"{float(row['volts']):.1f}" for row in probes) or "none"
+    return (
+        f"[teleop] bus_probe port={port} kind={kind} ids={ids} "
+        f"models={models} V={volts}"
+    )
+
+
+def iter_serial_candidates() -> list[str]:
+    """Stable by-id paths first, then raw ttyACM nodes."""
+    by_id = Path("/dev/serial/by-id")
+    if by_id.is_dir():
+        found = sorted(str(path) for path in by_id.iterdir() if path.is_symlink() or path.exists())
+        if found:
+            return found
+    return sorted(str(path) for path in Path("/dev").glob("ttyACM*"))
+
+
+def serial_port_key(port: str) -> str:
     try:
-        if not handler.setBaudRate(1_000_000):
-            raise SystemExit(f"[teleop] could not set 1 Mbps on {port}")
-        packet = PacketHandler(0)
-        rows: list[tuple[int, float, int]] = []
-        for motor_id in motor_ids:
-            _model, comm, err = packet.ping(handler, motor_id)
-            if comm != 0:
-                continue
-            raw, comm_v, _err_v = packet.read1ByteTxRx(handler, motor_id, _FEETECH_PRESENT_VOLTAGE_ADDR)
-            if comm_v != 0:
-                continue
-            rows.append((int(motor_id), float(raw) / 10.0, int(err)))
-        return rows
-    finally:
-        handler.closePort()
+        return str(Path(port).resolve())
+    except OSError:
+        return port
+
+
+def ports_are_same(left: str | None, right: str | None) -> bool:
+    if not left or not right:
+        return False
+    return serial_port_key(left) == serial_port_key(right)
+
+
+def discover_feetech_buses(ports: list[str] | None = None, *, log: bool = True) -> dict[str, list[str]]:
+    """Ping adapters. Return ``{kind: [port, ...]}`` for pingti/so101/partial/empty."""
+    found: dict[str, list[str]] = {"pingti": [], "so101": [], "partial": [], "empty": []}
+    candidates = ports or iter_serial_candidates()
+    if not candidates:
+        if log:
+            print("[teleop] bus_probe no /dev/ttyACM* or /dev/serial/by-id adapters", flush=True)
+        return found
+    for port in candidates:
+        try:
+            probes = read_feetech_bus_probe(port, motor_ids=range(1, 9))
+        except SystemExit as exc:
+            if log:
+                print(f"[teleop] bus_probe port={port} err={exc}", flush=True)
+            continue
+        kind = classify_feetech_bus(probes)
+        found.setdefault(kind, []).append(port)
+        if not log:
+            continue
+        print(format_bus_probe_line(port, probes, kind=kind), flush=True)
+        if kind == "so101":
+            print(
+                f"[teleop] bus_probe port={port} is SO101 (6x sts3215), not PingTi. "
+                "Use this as --port, not --pingti_port.",
+                flush=True,
+            )
+        elif kind == "empty":
+            print(
+                f"[teleop] bus_probe port={port} USB adapter is up but no STS motors answered. "
+                "If this is PingTi, check the 12 V supply and daisy-chain.",
+                flush=True,
+            )
+        elif kind == "partial":
+            missing = [mid for mid in range(1, 9) if mid not in {int(row["id"]) for row in probes}]
+            print(
+                f"[teleop] bus_probe port={port} partial PingTi/SO101 ids missing={missing}",
+                flush=True,
+            )
+    return found
+
+
+def probe_serial_ports(ports: list[str] | None = None) -> int:
+    """Print kind=pingti/so101/empty/partial for each USB serial. Never writes Goal/Torque."""
+    found = discover_feetech_buses(ports)
+    if not found.get("pingti"):
+        print(
+            "[teleop] bus_probe found no PingTi bus (need ids 1–8, ids 2–3 model=2825 sts3250)",
+            flush=True,
+        )
+        return 1
+    return 0
+
+
+def _unique_bus(kind: str, found: dict[str, list[str]], *, exclude: str | None = None) -> str:
+    ports = [port for port in found.get(kind, []) if not ports_are_same(port, exclude)]
+    if len(ports) == 1:
+        return ports[0]
+    if kind == "pingti":
+        hint = "need ids 1–8, ids 2–3 sts3250. Check 12 V and `teleop_hw --probe_ports`."
+    else:
+        hint = "need ids 1–6 sts3215. Check the 5–7.4 V leader dongle."
+    if not ports:
+        raise SystemExit(f"[teleop] no {kind} bus ({hint})")
+    raise SystemExit(
+        f"[teleop] multiple {kind} buses {ports}; pass --port / --pingti_port / --follower_port"
+    )
+
+
+def resolve_leader_pingti_ports(
+    *,
+    leader_port: str | None,
+    pingti_port: str | None,
+    follower_port: str | None = None,
+    need_leader: bool = True,
+    need_pingti: bool = True,
+) -> tuple[str | None, str | None]:
+    """Bind SO101 leader and PingTi by motor table. ACM numbers are not trusted."""
+    scan = (need_leader and not leader_port) or (need_pingti and not pingti_port)
+    found = discover_feetech_buses() if scan else None
+    if need_leader:
+        if leader_port:
+            require_so101_bus(leader_port)
+        else:
+            assert found is not None
+            leader_port = _unique_bus("so101", found, exclude=follower_port)
+            print(f"[teleop] serial_bind auto leader={leader_port} kind=so101", flush=True)
+    if need_pingti:
+        if pingti_port:
+            require_pingti_bus(pingti_port)
+        else:
+            assert found is not None
+            pingti_port = _unique_bus("pingti", found)
+            print(f"[teleop] serial_bind auto pingti={pingti_port} kind=pingti", flush=True)
+    require_distinct_serial_ports(
+        leader_port if need_leader else None,
+        follower_port,
+        pingti_port if need_pingti else None,
+    )
+    print(
+        f"[teleop] serial_bind leader={leader_port} pingti={pingti_port} follower={follower_port}",
+        flush=True,
+    )
+    return leader_port, pingti_port
+
+
+def require_so101_bus(port: str) -> list[dict[str, Any]]:
+    """Refuse if this serial is PingTi or missing the 6-motor leader table."""
+    probes = read_feetech_bus_probe(port, motor_ids=range(1, 9))
+    kind = classify_feetech_bus(probes)
+    print(format_bus_probe_line(port, probes, kind=kind), flush=True)
+    if kind == "so101":
+        return probes
+    if kind == "pingti":
+        raise SystemExit(
+            f"[teleop] REFUSING SO101 leader on {port}: this is the PingTi bus "
+            "(ids 1–8, ids 2–3 sts3250). Swap --port / --pingti_port."
+        )
+    found_ids = [int(row["id"]) for row in probes]
+    raise SystemExit(
+        f"[teleop] SO101 leader missing motors on {port}: found={found_ids} kind={kind}. "
+        "Need ids 1–6 sts3215. Check USB and motor power."
+    )
+
+
+def require_pingti_bus(port: str) -> list[dict[str, Any]]:
+    """Refuse before torque writes if this serial is not the 8-motor PingTi bus."""
+    probes = read_feetech_bus_probe(port, motor_ids=range(1, 9))
+    kind = classify_feetech_bus(probes)
+    print(format_bus_probe_line(port, probes, kind=kind), flush=True)
+    if kind == "pingti":
+        return probes
+    found = [int(row["id"]) for row in probes]
+    missing = [mid for mid in range(1, 9) if mid not in found]
+    if kind == "so101":
+        raise SystemExit(
+            f"[teleop] REFUSING PingTi on {port}: this is the SO101 bus "
+            f"(6x sts3215 ids={found}), not PingTi (need ids 1–8, ids 2–3 sts3250). "
+            "Swap --port / --pingti_port. ACM numbers move when a dongle is replugged; "
+            "prefer /dev/serial/by-id/* or teleop_hw --probe_ports."
+        )
+    raise SystemExit(
+        f"[teleop] PingTi missing motor ids {missing} on {port} "
+        f"(need 1-8: pan, dual lift, dual elbow, wrist_flex, wrist_roll, gripper). "
+        "Check 12 V supply to the lower arm / daisy-chain. Refusing partial bus."
+    )
 
 
 def assert_feetech_bus_voltage_ok(
@@ -370,5 +595,9 @@ def open_so101_follower(
 
 def require_distinct_serial_ports(*ports: str | None) -> None:
     used = [port for port in ports if port]
-    if len(used) != len(set(used)):
-        raise SystemExit(f"[teleop] leader / follower / PingTi serial ports must be distinct, got {used}")
+    keys = [serial_port_key(port) for port in used]
+    if len(keys) != len(set(keys)):
+        raise SystemExit(
+            f"[teleop] leader / follower / PingTi serial ports must be distinct, got {used} "
+            f"(resolved={keys})"
+        )

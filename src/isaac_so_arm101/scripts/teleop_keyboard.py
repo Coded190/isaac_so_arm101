@@ -11,16 +11,17 @@ do not feed Se3Keyboard.
 
     UV_PROJECT_ENVIRONMENT=.venv-isaacsim-6.1 uv run --inexact teleop --scene palm --num_envs 1 --viz kit
 
-SO-ARM101 leader (6-D joint position, optional real followers):
+SO-ARM101 leader (6-D joint position, optional real followers). Ports auto-bind
+by motor table (SO101 = 6x sts3215, PingTi = 8-motor ids 2–3 sts3250):
 
     UV_PROJECT_ENVIRONMENT=.venv-isaacsim-6.1 uv run --inexact teleop --scene palm --viz kit \
-      --teleop_device so101leader --port /dev/ttyACM0
+      --teleop_device so101leader
     # optional real SO101 follower (leader motor space, not PingTi radians):
-    #   --follower_port /dev/ttyACM1
-    # optional real PingTi follower (sim 6 joints expanded to 8 motors):
-    #   --pingti_port /dev/ttyACM2
+    #   --follower_port /dev/ttyACM2
     # Kit smoke without serial:
     #   --teleop_device so101leader --mock_leader --mock_pingti --mock_follower
+    # probe USB without starting Kit:
+    #   --probe_ports
 """
 
 from __future__ import annotations
@@ -60,7 +61,12 @@ parser.add_argument(
     default="keyboard",
     help="keyboard=7-D SE3; so101leader=6-D PingTi joint pos. Lab --device is still cuda/cpu.",
 )
-parser.add_argument("--port", type=str, default="/dev/ttyACM0", help="SO101 leader serial port.")
+parser.add_argument(
+    "--port",
+    type=str,
+    default=None,
+    help="SO101 leader serial port. Default with so101leader: auto-detect 6x sts3215 bus.",
+)
 parser.add_argument(
     "--follower_port",
     type=str,
@@ -71,13 +77,15 @@ parser.add_argument(
     "--pingti_port",
     type=str,
     default=None,
-    help="Optional real PingTi follower. Holds present until N (or J) in the Kit viewport, then slowly follows sim.",
+    help="Real PingTi follower. Default with so101leader: auto-detect 8-motor bus and follow sim. "
+    "Keyboard stays HOLD until N. --no-pingti_follow holds present until N/J.",
 )
 parser.add_argument(
     "--pingti_follow",
-    action="store_true",
-    default=False,
-    help="Start slewing the real PingTi toward sim after connect (still capped). Default is hold present until N.",
+    action=argparse.BooleanOptionalAction,
+    default=None,
+    help="Real PingTi follows sim after connect. Default ON for so101leader, HOLD for keyboard. "
+    "Use --no-pingti_follow to hold present until N.",
 )
 parser.add_argument("--leader_id", type=str, default="so101_leader", help="LeRobot calibration id for the leader.")
 parser.add_argument("--follower_id", type=str, default="so101_follower", help="LeRobot calibration id for the follower.")
@@ -99,6 +107,11 @@ parser.add_argument(
     help="Record PingTi 8-motor send_action without serial (keyboard or so101leader).",
 )
 parser.add_argument(
+    "--probe_ports",
+    action="store_true",
+    help="Ping USB serial adapters, print pingti vs so101, and exit (no Kit).",
+)
+parser.add_argument(
     "--disable_pingti_torque",
     action="store_true",
     help="Write Torque_Enable=0 on PingTi ids 1–8 and exit (no Kit). Stop any teleop that holds the port first.",
@@ -108,14 +121,33 @@ AppLauncher.add_app_launcher_args(parser)
 parser.set_defaults(visualizer=["kit"])
 args_cli = parser.parse_args()
 
+if args_cli.probe_ports:
+    from isaac_so_arm101.devices.so101 import probe_serial_ports
+
+    raise SystemExit(probe_serial_ports())
+
 if args_cli.disable_pingti_torque:
     from isaac_so_arm101.devices.pingti import disable_pingti_torque_raw
+    from isaac_so_arm101.devices.so101 import resolve_leader_pingti_ports
 
-    port = args_cli.pingti_port or "/dev/ttyACM1"
+    _leader, port = resolve_leader_pingti_ports(
+        leader_port=None,
+        pingti_port=args_cli.pingti_port,
+        need_leader=False,
+        need_pingti=True,
+    )
     torque = disable_pingti_torque_raw(port)
-    bad = [mid for mid, val in torque.items() if int(val) != 0]
-    if bad:
-        print(f"[teleop] PingTi torque still on ids={bad} port={port}", flush=True)
+    still_on = [mid for mid, val in torque.items() if int(val) == 1]
+    unread = [mid for mid, val in torque.items() if int(val) < 0]
+    if still_on:
+        print(f"[teleop] PingTi torque still on ids={still_on} port={port}", flush=True)
+        sys.exit(1)
+    if unread:
+        print(
+            f"[teleop] PingTi torque readback failed ids={unread} port={port} "
+            "(timeout/corrupt is not torque=1; check daisy-chain)",
+            flush=True,
+        )
         sys.exit(1)
     print(f"[teleop] PingTi torque off port={port} ids={sorted(torque)}", flush=True)
     sys.exit(0)
@@ -158,6 +190,29 @@ if args_cli.follower_port and args_cli.teleop_device != "so101leader":
 if args_cli.mock_follower and args_cli.teleop_device != "so101leader":
     print("[teleop] --mock_follower requires --teleop_device so101leader", file=sys.stderr)
     sys.exit(2)
+
+from isaac_so_arm101.devices.pipeline import pingti_follow_at_start  # noqa: E402
+
+args_cli.pingti_follow = pingti_follow_at_start(
+    teleop_device=args_cli.teleop_device,
+    flag=args_cli.pingti_follow,
+    mock_pingti=args_cli.mock_pingti,
+)
+
+_need_leader = args_cli.teleop_device == "so101leader" and not args_cli.mock_leader
+_need_pingti = (not args_cli.mock_pingti) and (
+    args_cli.teleop_device == "so101leader" or bool(args_cli.pingti_port)
+)
+if _need_leader or _need_pingti:
+    from isaac_so_arm101.devices.so101 import resolve_leader_pingti_ports
+
+    args_cli.port, args_cli.pingti_port = resolve_leader_pingti_ports(
+        leader_port=args_cli.port,
+        pingti_port=args_cli.pingti_port,
+        follower_port=args_cli.follower_port,
+        need_leader=_need_leader,
+        need_pingti=_need_pingti,
+    )
 
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
@@ -333,24 +388,6 @@ def main():
         args_cli.follower_port if not args_cli.mock_follower else None,
         args_cli.pingti_port if not args_cli.mock_pingti else None,
     )
-    if args_cli.pingti_port and not args_cli.mock_pingti:
-        from isaac_so_arm101.devices.so101 import read_feetech_bus_voltages
-
-        rows = read_feetech_bus_voltages(args_cli.pingti_port, motor_ids=range(1, 9))
-        found = [mid for mid, _volt, _err in rows]
-        print(
-            f"[teleop] PingTi preflight port={args_cli.pingti_port} "
-            f"found_ids={found} "
-            + " ".join(f"id{mid}={volt:.1f}V" for mid, volt, _err in rows),
-            flush=True,
-        )
-        missing = [mid for mid in range(1, 9) if mid not in found]
-        if missing:
-            raise SystemExit(
-                f"[teleop] PingTi missing motor ids {missing} on {args_cli.pingti_port} "
-                f"(need 1-8: pan, dual lift, dual elbow, wrist_flex, wrist_roll, gripper). "
-                "Check 12 V supply to the lower arm / daisy-chain. Refusing partial bus."
-            )
     env_cfg = parse_env_cfg(
         args_cli.task,
         device=args_cli.device,
@@ -401,10 +438,10 @@ def main():
 
     session = {
         "leader": None,
-        "pingti_follow": False,
+        "pingti_follow": bool(args_cli.pingti_follow),
         "follow_keys_down": set(),
         "follow_toggle_at": 0.0,
-        "pingti_send_now": False,
+        "pingti_send_now": bool(args_cli.pingti_follow),
     }
 
     def _reset():
@@ -510,15 +547,25 @@ def main():
                 mock=args_cli.mock_pingti or not args_cli.pingti_port,
             )
             atexit.register(pingti.close)
-            print(
-                f"[teleop] PingTi holding present. Press N (or J) in the Isaac Sim viewport to slowly "
-                f"follow sim. H is Kit Hide and will not arm follow. Press N again to hold. "
-                f"slew_max={GOAL_SLEW_MAX} send_every={PINGTI_SEND_EVERY_STEPS}. "
-                "Do not expect the real arm to move until N. "
-                "Ctrl+C or closing Kit disables PingTi torque so the arm goes limp. "
-                "Grep pingti_follow=ON / sent= / PingTi shutdown in the terminal.",
-                flush=True,
-            )
+            if args_cli.pingti_follow:
+                print(
+                    f"[teleop] PingTi following sim at start (so101leader teleop-to-teleop). "
+                    f"Press M to hold present, N/J to follow again. "
+                    f"slew_max={GOAL_SLEW_MAX} send_every={PINGTI_SEND_EVERY_STEPS}. "
+                    "Ctrl+C or closing Kit disables PingTi torque so the arm goes limp. "
+                    "Grep pingti_follow=ON / sent= / PingTi shutdown in the terminal.",
+                    flush=True,
+                )
+            else:
+                print(
+                    f"[teleop] PingTi holding present. Press N (or J) in the Isaac Sim viewport to slowly "
+                    f"follow sim. H is Kit Hide and will not arm follow. Press N again to hold. "
+                    f"slew_max={GOAL_SLEW_MAX} send_every={PINGTI_SEND_EVERY_STEPS}. "
+                    "Do not expect the real arm to move until N. "
+                    "Ctrl+C or closing Kit disables PingTi torque so the arm goes limp. "
+                    "Grep pingti_follow=ON / sent= / PingTi shutdown in the terminal.",
+                    flush=True,
+                )
             if args_cli.pingti_follow:
                 session["pingti_follow"] = True
                 session["pingti_send_now"] = True

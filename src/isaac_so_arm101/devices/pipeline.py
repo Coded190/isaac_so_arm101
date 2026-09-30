@@ -15,6 +15,22 @@ from isaac_so_arm101.devices.leader_map import (
 from isaac_so_arm101.teleop_constants import PINGTI_JOINTS
 
 
+def pingti_follow_at_start(
+    *,
+    teleop_device: str,
+    flag: bool | None,
+    mock_pingti: bool = False,
+) -> bool:
+    """Whether Kit teleop should command the real PingTi after connect.
+
+    ``so101leader`` is teleop-to-teleop (same as ``teleop_hw``): follow immediately.
+    Keyboard IK stays HOLD until N so a stray key cannot slam the arm.
+    """
+    if flag is not None:
+        return bool(flag)
+    return teleop_device == "so101leader" and not mock_pingti
+
+
 @dataclass
 class LeaderHwStep:
     raw: dict[str, float]

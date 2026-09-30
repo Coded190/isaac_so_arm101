@@ -14,6 +14,8 @@ Lab AppLauncher already owns ``--device`` (cuda/cpu); hardware is ``--teleop_dev
 
 from __future__ import annotations
 
+import math
+
 PINGTI_ARM_JOINTS = (
     "base_yaw",
     "shoulder_pitch",
@@ -78,6 +80,11 @@ PINGTI_JOINT_LIMITS_RAD = {
     "wrist_roll": (-3.14159, 3.14159),
     "gripper_moving": (-0.0872665, 1.5708),
 }
+# 0–4095 cal ⇒ Feetech 100 = one full turn. URDF jaws only travel ~1.66 rad
+# (~26 units). Mapping closed→open onto 0–100 slammed id 8 through the open
+# stop (same Overload as Goal=0 into the closed stop).
+_G_LO, _G_HI = PINGTI_JOINT_LIMITS_RAD["gripper_moving"]
+GRIPPER_FEETECH_OPEN_CEILING = (_G_HI - _G_LO) / (2.0 * math.pi) * SO101_LEADER_GRIPPER_RANGE[1]
 # Hardware motor count per URDF joint. PingTi has 8 Feetech motors, SO101 has 6.
 # The extra two are mechanically coupled dual-drives (shoulder_pitch 2x STS3250,
 # elbow_pitch 2x STS3215). Sim / URDF expose one joint each, so the leader still

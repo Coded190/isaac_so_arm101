@@ -12,6 +12,7 @@ import math
 
 from isaac_so_arm101.teleop_constants import (
     GRIPPER_FEETECH_CLOSED_FLOOR,
+    GRIPPER_FEETECH_OPEN_CEILING,
     PINGTI_FOLLOWER_MOTORS,
     PINGTI_GRIPPER_JOINT,
     PINGTI_JOINT_LIMITS_RAD,
@@ -152,8 +153,24 @@ def leader_action_from_state(state: dict[str, float]) -> dict[str, float]:
 
 
 def clamp_gripper_feetech(value: float) -> float:
-    """Keep PingTi gripper Goal off the 0–4095 calibration extreme (closed stop)."""
-    return _clip(float(value), GRIPPER_FEETECH_CLOSED_FLOOR, SO101_LEADER_GRIPPER_RANGE[1])
+    """Keep PingTi gripper Goal inside URDF jaw travel, not a 0–4095 full turn."""
+    return _clip(float(value), GRIPPER_FEETECH_CLOSED_FLOOR, GRIPPER_FEETECH_OPEN_CEILING)
+
+
+def gripper_feetech_in_range(value: float, atol: float = 1e-6) -> bool:
+    return GRIPPER_FEETECH_CLOSED_FLOOR - atol <= float(value) <= GRIPPER_FEETECH_OPEN_CEILING + atol
+
+
+def urdf_rad_to_feetech_gripper(rad: float) -> float:
+    """Sim gripper rad → Feetech RANGE_0_100 using 2π = 100 (0–4095 cal).
+
+    ``rad_to_gripper_0_100`` through URDF limits sent 0–100 = a full motor turn.
+    URDF open is only ~1.66 rad (~26 units). That full-turn Goal overloads id 8.
+    """
+    lo, hi = PINGTI_JOINT_LIMITS_RAD[PINGTI_GRIPPER_JOINT]
+    x = _clip(float(rad), lo, hi)
+    units = (x - lo) / (2.0 * math.pi) * SO101_LEADER_GRIPPER_RANGE[1]
+    return clamp_gripper_feetech(units)
 
 
 def pingti_follower_action_from_leader(state: dict[str, float]) -> dict[str, float]:
@@ -202,7 +219,7 @@ def pingti_follower_action_from_joints(joints: tuple[float, ...] | list[float]) 
     for motor, joint, rad in zip(SO101_LEADER_MOTORS, PINGTI_JOINTS, joints, strict=True):
         lo, hi = PINGTI_JOINT_LIMITS_RAD[joint]
         if joint == PINGTI_GRIPPER_JOINT:
-            state[motor] = clamp_gripper_feetech(rad_to_gripper_0_100(rad, lo, hi))
+            state[motor] = urdf_rad_to_feetech_gripper(rad)
         else:
             # Undo SO101_PINGTI_SIGN: sim rad is already flipped for those axes.
             state[motor] = SO101_PINGTI_SIGN[motor] * urdf_rad_to_feetech_m100(rad)

@@ -94,28 +94,30 @@ UV_PROJECT_ENVIRONMENT=.venv-isaacsim-6.1 uv pip install 'lerobot[feetech]'
 UV_PROJECT_ENVIRONMENT=.venv-isaacsim-6.1 uv pip install -U torch==2.11.0 torchvision==0.26.0 \
   --index-url https://download.pytorch.org/whl/cu128
 sudo usermod -aG dialout "$USER"   # then log out/in for /dev/ttyACM*
-lerobot-calibrate --teleop.type=so101_leader --teleop.port=/dev/ttyACM0 --teleop.id=so101_leader
+lerobot-calibrate --teleop.type=so101_leader --teleop.port=/dev/ttyACM1 --teleop.id=so101_leader
 UV_PROJECT_ENVIRONMENT=.venv-isaacsim-6.1 uv run --inexact teleop --scene palm --viz kit \
-  --teleop_device so101leader --port /dev/ttyACM0
+  --teleop_device so101leader
 ```
+
+Ports are auto-detected by Feetech table (SO101 leader = 6× STS3215 @ ~5.5 V, PingTi = 8 motors with STS3250 on ids 2–3 @ ~12 V). ACM numbers swap when a dongle is replugged; override with `--port` / `--pingti_port` or inspect with `teleop_hw --probe_ports`.
 
 Optional real SO101 follower (same leader motor dict, **not** PingTi radians):
 
 ```bash
-lerobot-calibrate --robot.type=so101_follower --robot.port=/dev/ttyACM1 --robot.id=so101_follower
+lerobot-calibrate --robot.type=so101_follower --robot.port=/dev/ttyACM2 --robot.id=so101_follower
 UV_PROJECT_ENVIRONMENT=.venv-isaacsim-6.1 uv run --inexact teleop --scene palm --viz kit \
-  --teleop_device so101leader --port /dev/ttyACM0 --follower_port /dev/ttyACM1
+  --teleop_device so101leader --follower_port /dev/ttyACM2
 ```
 
-Real PingTi follower **through sim** (keyboard IK or SO101 leader). After each `env.step`, the sim's 6 `joint_pos_target` values are expanded to an 8-motor `{name}.pos` dict and sent with **LeRobot `SOFollower.send_action`** (`sync_write("Goal_Position")`). Connect / calibrate / disconnect are the same LeRobot path as the SO101 follower.
+Real PingTi follower **through sim** (keyboard IK or SO101 leader). After each `env.step`, the sim's 6 `joint_pos_target` values are expanded to an 8-motor `{name}.pos` dict and sent with **LeRobot `SOFollower.send_action`**. Connect / calibrate / disconnect are the same LeRobot path as the SO101 follower.
 
 ```bash
-# keyboard → sim PingTi → real PingTi
+# keyboard → sim PingTi → real PingTi (auto-detects the 8-motor bus)
 UV_PROJECT_ENVIRONMENT=.venv-isaacsim-6.1 uv run --inexact teleop --scene palm --viz kit \
-  --pingti_port /dev/ttyACM2
-# SO101 leader → sim PingTi → real PingTi (optional SO101 follower too)
+  --pingti_port /dev/ttyACM0
+# SO101 leader → sim PingTi → real PingTi (ports auto-bind; press N in Kit to follow)
 UV_PROJECT_ENVIRONMENT=.venv-isaacsim-6.1 uv run --inexact teleop --scene palm --viz kit \
-  --teleop_device so101leader --port /dev/ttyACM0 --pingti_port /dev/ttyACM2
+  --teleop_device so101leader
 ```
 
 The Feetech bus matches the working `pingti_lerobot_bridge` table (SO101 names, ids 1–8): `shoulder_pan`, `shoulder_lift_secondary` (STS3250), `shoulder_lift` (STS3250), `elbow_flex_secondary`, `elbow_flex`, `wrist_flex`, `wrist_roll`, `gripper`. Dual-drive secondaries are mounted opposite, so they get **`-val`** (RANGE_M100_100), not the same Goal_Position. Handshake model numbers: sts3215=777, sts3250=2825.
@@ -126,8 +128,7 @@ No-sim **SO101 leader → real PingTi follower** (bypasses Isaac):
 
 ```bash
 UV_PROJECT_ENVIRONMENT=.venv-isaacsim-6.1 uv run --inexact teleop_hw --mock --steps 12
-UV_PROJECT_ENVIRONMENT=.venv-isaacsim-6.1 uv run --inexact teleop_hw \
-  --port /dev/ttyACM0 --pingti_port /dev/ttyACM2
+UV_PROJECT_ENVIRONMENT=.venv-isaacsim-6.1 uv run --inexact teleop_hw
 ```
 
 No serial yet? `--teleop_device so101leader --mock_leader --mock_follower --mock_pingti` holds zeros / records follower dicts so you can check the 6-D and 8-motor paths in Kit.

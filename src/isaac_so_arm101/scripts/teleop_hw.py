@@ -5,8 +5,9 @@ Bypasses the simulator. Leader ±100 / gripper 0–100 expands to 8 Feetech
 Optional real SO101 follower still gets the original leader dict.
 
     UV_PROJECT_ENVIRONMENT=.venv-isaacsim-6.1 uv run --inexact teleop_hw --mock --steps 12
-    UV_PROJECT_ENVIRONMENT=.venv-isaacsim-6.1 uv run --inexact teleop_hw \
-      --port /dev/ttyACM0 --pingti_port /dev/ttyACM1
+    UV_PROJECT_ENVIRONMENT=.venv-isaacsim-6.1 uv run --inexact teleop_hw --probe_ports
+    UV_PROJECT_ENVIRONMENT=.venv-isaacsim-6.1 uv run --inexact teleop_hw
+    # Auto-binds SO101 leader (6x sts3215) and PingTi (8-motor, ids 2–3 sts3250).
     # optional SO101 follower on a third adapter:
     #   --follower_port /dev/ttyACM2
 """
@@ -24,7 +25,8 @@ from isaac_so_arm101.devices.so101 import (
     ScriptedSO101Leader,
     open_so101_follower,
     open_so101_leader,
-    require_distinct_serial_ports,
+    probe_serial_ports,
+    resolve_leader_pingti_ports,
 )
 from isaac_so_arm101.teleop_constants import (
     GRIPPER_FEETECH_CLOSED_FLOOR,
@@ -47,8 +49,23 @@ def _scripted_isolation_frames() -> list[dict[str, float]]:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="SO101 leader → PingTi follower (no sim).")
-    parser.add_argument("--port", type=str, default="/dev/ttyACM0", help="SO101 leader serial port.")
-    parser.add_argument("--pingti_port", type=str, default=None, help="Real PingTi follower serial port.")
+    parser.add_argument(
+        "--port",
+        type=str,
+        default=None,
+        help="SO101 leader serial port. Default: auto-detect the 6x sts3215 bus.",
+    )
+    parser.add_argument(
+        "--pingti_port",
+        type=str,
+        default=None,
+        help="PingTi follower serial port. Default: auto-detect the 8-motor sts3250 bus.",
+    )
+    parser.add_argument(
+        "--probe_ports",
+        action="store_true",
+        help="Ping /dev/serial/by-id (or ttyACM*) and print pingti vs so101 vs empty. No Goal/Torque writes.",
+    )
     parser.add_argument(
         "--follower_port",
         type=str,
@@ -72,14 +89,29 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def run_from_args(args: argparse.Namespace) -> int:
+    if args.probe_ports:
+        return probe_serial_ports()
     if args.disable_pingti_torque:
         from isaac_so_arm101.devices.pingti import disable_pingti_torque_raw
 
-        port = args.pingti_port or "/dev/ttyACM1"
+        _leader, port = resolve_leader_pingti_ports(
+            leader_port=None,
+            pingti_port=args.pingti_port,
+            need_leader=False,
+            need_pingti=True,
+        )
         torque = disable_pingti_torque_raw(port)
-        bad = [mid for mid, val in torque.items() if int(val) != 0]
-        if bad:
-            print(f"[teleop_hw] PingTi torque still on ids={bad} port={port}", flush=True)
+        still_on = [mid for mid, val in torque.items() if int(val) == 1]
+        unread = [mid for mid, val in torque.items() if int(val) < 0]
+        if still_on:
+            print(f"[teleop_hw] PingTi torque still on ids={still_on} port={port}", flush=True)
+            return 1
+        if unread:
+            print(
+                f"[teleop_hw] PingTi torque readback failed ids={unread} port={port} "
+                "(timeout/corrupt is not torque=1; check daisy-chain)",
+                flush=True,
+            )
             return 1
         print(f"[teleop_hw] PingTi torque off port={port} ids={sorted(torque)}", flush=True)
         return 0
@@ -89,9 +121,14 @@ def run_from_args(args: argparse.Namespace) -> int:
         steps = len(_scripted_isolation_frames())
     if not mock and steps < 1:
         steps = 10**9
-    if not mock and not args.pingti_port:
-        print("[teleop_hw] --pingti_port is required unless --mock", file=sys.stderr)
-        return 2
+    if not mock:
+        args.port, args.pingti_port = resolve_leader_pingti_ports(
+            leader_port=args.port,
+            pingti_port=args.pingti_port,
+            follower_port=args.follower_port,
+            need_leader=True,
+            need_pingti=True,
+        )
 
     leader = None
     so101 = None
@@ -108,7 +145,6 @@ def run_from_args(args: argparse.Namespace) -> int:
             atexit.register(pingti.close)
             so101 = open_so101_follower(port="mock", mock=True)
         else:
-            require_distinct_serial_ports(args.port, args.follower_port, args.pingti_port)
             leader = open_so101_leader(
                 port=args.port,
                 robot_id=args.leader_id,

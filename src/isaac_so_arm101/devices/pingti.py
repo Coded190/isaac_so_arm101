@@ -262,16 +262,26 @@ class PingTiFollowerSession:
             print(f"[teleop] PingTi shutdown complete torque_off_ids={off}", flush=True)
 
 
+def _release_bus_port(bus) -> None:
+    """LeRobot leaves PortHandler.is_using True after a timed-out TxRx; later reads then fail."""
+    handler = getattr(bus, "port_handler", None)
+    if handler is not None and getattr(handler, "is_using", False):
+        handler.is_using = False
+
+
 def _seq_read(bus, data_name: str, *, normalize: bool = True, num_retry: int = 4) -> dict[str, Any]:
     """Feetech 8-motor sync_read often returns no status packet; read one id at a time.
 
     One overloaded motor (gripper id 8) must not abort the other seven reads.
     """
+    _release_bus_port(bus)
     out: dict[str, Any] = {}
     for motor in bus.motors:
+        _release_bus_port(bus)
         try:
             out[motor] = bus.read(data_name, motor, normalize=normalize, num_retry=num_retry)
         except Exception as exc:  # noqa: BLE001
+            _release_bus_port(bus)
             print(
                 f"[teleop_hw] read_failed name={data_name} motor={motor} err={exc!r}",
                 flush=True,
@@ -504,6 +514,7 @@ def make_pingti_follower(
             desired lift=100 while Goal/Present stayed at the hold-present value.
             ``write`` waits for a status packet, which is how the arm moved before.
             """
+            _release_bus_port(self.bus)
             wrapped = pingti_follower_action_from_leader(action)
             goal_pos = {
                 key.removesuffix(".pos"): val for key, val in wrapped.items() if key.endswith(".pos")
@@ -566,7 +577,8 @@ def make_pingti_follower(
                     f"[teleop_hw] send_seq n={n} wrote={wrote}/{len(slewed)} "
                     f"lift={sent.get('shoulder_lift.pos')} "
                     f"pan={sent.get('shoulder_pan.pos')} "
-                    f"roll={sent.get('wrist_roll.pos')}",
+                    f"roll={sent.get('wrist_roll.pos')} "
+                    f"grip={sent.get('gripper.pos')}",
                     flush=True,
                 )
             if wrote == 0:

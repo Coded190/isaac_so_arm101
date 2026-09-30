@@ -22,7 +22,6 @@ from isaac_so_arm101.devices.leader_map import (
     pingti_follower_action_from_leader,
     pingti_joint_pos_from_leader,
     pingti_named_joints_from_leader,
-    rad_to_gripper_0_100,
     rad_to_signed_m100,
 )
 from isaac_so_arm101.devices.pingti import (
@@ -45,6 +44,7 @@ from isaac_so_arm101.scripts.teleop_hw import main as teleop_hw_main
 from isaac_so_arm101.teleop_constants import (
     GRIPPER_FEETECH_CLOSED_FLOOR,
     GRIPPER_FEETECH_CLOSED_HOLD,
+    GRIPPER_FEETECH_OPEN_CEILING,
     JOINT_POS_ACTION_DIM,
     PINGTI_DUAL_JOINTS,
     PINGTI_FOLLOWER_MOTOR_IDS,
@@ -99,7 +99,8 @@ class KeyboardToSimPathTests(unittest.TestCase):
         self.assertAlmostEqual(action["shoulder_lift_secondary.pos"], -action["shoulder_lift.pos"], places=5)
         self.assertGreater(action["elbow_flex.pos"], 5.0)
         self.assertLess(action["elbow_flex.pos"], 10.0)
-        self.assertGreater(action["gripper.pos"], 40.0)
+        self.assertGreater(action["gripper.pos"], GRIPPER_FEETECH_CLOSED_FLOOR - 1e-6)
+        self.assertLessEqual(action["gripper.pos"], GRIPPER_FEETECH_OPEN_CEILING + 1e-6)
         self.assertAlmostEqual(action["shoulder_pan.pos"], 0.0, places=5)
         mock = MockPingTiFollower()
         mock.send_action(action)
@@ -111,6 +112,8 @@ class KeyboardToSimPathTests(unittest.TestCase):
         self.assertIn("--pingti_port", source)
         self.assertIn("--mock_pingti", source)
         self.assertIn("send_sim_joints_to_pingti", source)
+        self.assertIn("resolve_leader_pingti_ports", source)
+        self.assertIn("--probe_ports", source)
         self.assertIn("env.step(actions)", source)
         step_at = source.index("env.step(actions)")
         send_at = source.index("send_sim_joints_to_pingti(robot, pingti)")
@@ -119,7 +122,9 @@ class KeyboardToSimPathTests(unittest.TestCase):
         self.assertIn("add_callback(_key", source)
         self.assertIn("poll_kit_key_rising", source)
         self.assertIn("PINGTI_FOLLOW_KEYS", source)
-        self.assertIn("--pingti_follow", source)
+        self.assertIn("pingti_follow_at_start", source)
+        self.assertIn("BooleanOptionalAction", source)
+        self.assertIn("following sim at start", source)
         self.assertIn("--disable_pingti_torque", source)
         self.assertIn("PINGTI_SEND_EVERY_STEPS", source)
         self.assertIn("hw_snapshot", source)
@@ -269,16 +274,11 @@ class LeaderToPingTiFollowerTests(unittest.TestCase):
             samples = (lo, 0.0, hi) if joint != PINGTI_GRIPPER_JOINT else (lo, (lo + hi) / 2.0, hi)
             for rad in samples:
                 if joint == PINGTI_GRIPPER_JOINT:
-                    norm = rad_to_gripper_0_100(rad, lo, hi)
-                    # gripper 0–100 is a linear lerp; inverse is map_gripper via joints helper
                     joints = [0.0] * 6
                     joints[-1] = rad
                     action = pingti_follower_action_from_joints(joints)
-                    self.assertAlmostEqual(
-                        action["gripper.pos"],
-                        max(norm, GRIPPER_FEETECH_CLOSED_FLOOR),
-                        places=5,
-                    )
+                    self.assertGreaterEqual(action["gripper.pos"], GRIPPER_FEETECH_CLOSED_FLOOR - 1e-6)
+                    self.assertLessEqual(action["gripper.pos"], GRIPPER_FEETECH_OPEN_CEILING + 1e-6)
                 else:
                     norm = rad_to_signed_m100(rad, lo, hi)
                     back = map_signed_m100(norm, lo, hi)
@@ -386,6 +386,43 @@ class LeaderToPingTiFollowerTests(unittest.TestCase):
         self.assertGreater(gripper_goal_from_present(80.0, 11.0), GRIPPER_FEETECH_CLOSED_HOLD)
         self.assertLess(GRIPPER_FEETECH_CLOSED_FLOOR, GRIPPER_FEETECH_CLOSED_HOLD)
 
+    def test_gripper_feetech_stays_inside_urdf_jaw_travel(self):
+        """0–4095 cal makes 100 a full turn. URDF jaws are ~26 units; 0 and 100 stall id 8."""
+        from isaac_so_arm101.devices.leader_map import (
+            clamp_gripper_feetech,
+            gripper_feetech_in_range,
+            urdf_rad_to_feetech_gripper,
+        )
+
+        lo, hi = PINGTI_JOINT_LIMITS_RAD[PINGTI_GRIPPER_JOINT]
+        self.assertGreater(GRIPPER_FEETECH_OPEN_CEILING, GRIPPER_FEETECH_CLOSED_HOLD)
+        self.assertLess(GRIPPER_FEETECH_OPEN_CEILING, 40.0)
+        self.assertGreaterEqual(urdf_rad_to_feetech_gripper(lo), GRIPPER_FEETECH_CLOSED_FLOOR)
+        self.assertLessEqual(urdf_rad_to_feetech_gripper(hi), GRIPPER_FEETECH_OPEN_CEILING + 1e-6)
+        self.assertGreater(urdf_rad_to_feetech_gripper(hi), GRIPPER_FEETECH_CLOSED_HOLD)
+        self.assertFalse(gripper_feetech_in_range(0.0))
+        self.assertFalse(gripper_feetech_in_range(100.0))
+        self.assertTrue(gripper_feetech_in_range(GRIPPER_FEETECH_CLOSED_FLOOR))
+        self.assertTrue(gripper_feetech_in_range(GRIPPER_FEETECH_OPEN_CEILING))
+        self.assertAlmostEqual(clamp_gripper_feetech(0.0), GRIPPER_FEETECH_CLOSED_FLOOR)
+        self.assertAlmostEqual(clamp_gripper_feetech(100.0), GRIPPER_FEETECH_OPEN_CEILING, places=5)
+        for raw in (0.0, 10.0, 25.0, 50.0, 80.0, 100.0):
+            joints = pingti_joint_pos_from_leader(leader_state_hold({"gripper": raw}))
+            action = pingti_follower_action_from_joints(joints)
+            grip = action["gripper.pos"]
+            self.assertTrue(gripper_feetech_in_range(grip), msg=f"leader={raw} grip={grip}")
+        for rad in (lo, 0.0, 0.4, 0.8, 1.2, hi):
+            units = urdf_rad_to_feetech_gripper(rad)
+            self.assertTrue(gripper_feetech_in_range(units), msg=f"rad={rad} units={units}")
+        opened = pingti_follower_action_from_joints(
+            pingti_joint_pos_from_leader(leader_state_hold({"gripper": 80.0}))
+        )["gripper.pos"]
+        self.assertGreater(opened, GRIPPER_FEETECH_CLOSED_HOLD)
+        self.assertLess(opened, 40.0)
+        from isaac_so_arm101.devices.pingti import gripper_goal_from_present
+
+        self.assertGreater(gripper_goal_from_present(opened, 11.31), 11.31)
+
     def test_mock_nudge_does_not_slam(self):
         from isaac_so_arm101.devices.pingti import GOAL_SLEW_MAX, open_pingti_follower
         from isaac_so_arm101.teleop_constants import PINGTI_FOLLOWER_MOTORS
@@ -485,6 +522,109 @@ class LeaderToPingTiFollowerTests(unittest.TestCase):
 
         args = parse_args(["--disable_pingti_torque", "--pingti_port", "/dev/ttyACM1"])
         self.assertTrue(args.disable_pingti_torque)
+        self.assertIn("--probe_ports", source)
+        self.assertIn("resolve_leader_pingti_ports", source)
+        self.assertIsNone(parse_args([]).port)
+        self.assertIsNone(parse_args([]).pingti_port)
+        probe_args = parse_args(["--probe_ports"])
+        self.assertTrue(probe_args.probe_ports)
+
+    def test_resolve_leader_pingti_ports_auto_bind(self):
+        from unittest.mock import patch
+
+        from isaac_so_arm101.devices.so101 import resolve_leader_pingti_ports
+
+        found = {
+            "so101": ["/dev/serial/by-id/leader"],
+            "pingti": ["/dev/serial/by-id/pingti"],
+            "partial": [],
+            "empty": [],
+        }
+        with patch("isaac_so_arm101.devices.so101.discover_feetech_buses", return_value=found):
+            leader, pingti = resolve_leader_pingti_ports(
+                leader_port=None,
+                pingti_port=None,
+                need_leader=True,
+                need_pingti=True,
+            )
+        self.assertEqual(leader, "/dev/serial/by-id/leader")
+        self.assertEqual(pingti, "/dev/serial/by-id/pingti")
+        empty_pingti = {
+            "so101": ["/dev/ttyACM1"],
+            "pingti": [],
+            "partial": [],
+            "empty": ["/dev/ttyACM0"],
+        }
+        with patch("isaac_so_arm101.devices.so101.discover_feetech_buses", return_value=empty_pingti):
+            with self.assertRaises(SystemExit) as caught:
+                resolve_leader_pingti_ports(leader_port=None, pingti_port=None)
+        self.assertIn("no pingti bus", str(caught.exception).lower())
+        with (
+            patch("isaac_so_arm101.devices.so101.require_so101_bus"),
+            patch("isaac_so_arm101.devices.so101.require_pingti_bus"),
+        ):
+            leader, pingti = resolve_leader_pingti_ports(
+                leader_port="/dev/ttyACM1",
+                pingti_port="/dev/ttyACM0",
+            )
+        self.assertEqual(leader, "/dev/ttyACM1")
+        self.assertEqual(pingti, "/dev/ttyACM0")
+
+    def test_so101leader_follows_real_pingti_by_default(self):
+        from isaac_so_arm101.devices.pipeline import pingti_follow_at_start
+        from isaac_so_arm101.devices.pingti import _release_bus_port
+
+        self.assertTrue(pingti_follow_at_start(teleop_device="so101leader", flag=None, mock_pingti=False))
+        self.assertFalse(pingti_follow_at_start(teleop_device="keyboard", flag=None, mock_pingti=False))
+        self.assertFalse(pingti_follow_at_start(teleop_device="so101leader", flag=None, mock_pingti=True))
+        self.assertFalse(pingti_follow_at_start(teleop_device="so101leader", flag=False, mock_pingti=False))
+        self.assertTrue(pingti_follow_at_start(teleop_device="keyboard", flag=True, mock_pingti=False))
+
+        class Handler:
+            is_using = True
+
+        class Bus:
+            port_handler = Handler()
+
+        bus = Bus()
+        _release_bus_port(bus)
+        self.assertFalse(bus.port_handler.is_using)
+
+    def test_classify_feetech_bus_identity(self):
+        from isaac_so_arm101.devices.so101 import (
+            FEETECH_STS3215_MODEL,
+            FEETECH_STS3250_MODEL,
+            classify_feetech_bus,
+            format_bus_probe_line,
+            require_pingti_bus,
+        )
+
+        so101 = [{"id": i, "model": FEETECH_STS3215_MODEL, "volts": 5.5, "torque": 0, "err": 0} for i in range(1, 7)]
+        self.assertEqual(classify_feetech_bus(so101), "so101")
+        self.assertIn("kind=so101", format_bus_probe_line("/dev/ttyACM1", so101))
+        pingti = []
+        for mid in range(1, 9):
+            model = FEETECH_STS3250_MODEL if mid in (2, 3) else FEETECH_STS3215_MODEL
+            pingti.append({"id": mid, "model": model, "volts": 12.0, "torque": 0, "err": 0})
+        self.assertEqual(classify_feetech_bus(pingti), "pingti")
+        self.assertEqual(classify_feetech_bus([]), "empty")
+        self.assertEqual(classify_feetech_bus(so101[:3]), "partial")
+        from unittest.mock import patch
+
+        with patch("isaac_so_arm101.devices.so101.read_feetech_bus_probe", return_value=so101):
+            with self.assertRaises(SystemExit) as caught:
+                require_pingti_bus("/dev/ttyACM1")
+        self.assertIn("this is the SO101 bus", str(caught.exception))
+        with patch("isaac_so_arm101.devices.so101.read_feetech_bus_probe", return_value=[]):
+            with self.assertRaises(SystemExit) as caught:
+                require_pingti_bus("/dev/ttyACM0")
+        self.assertIn("PingTi missing motor ids", str(caught.exception))
+        from isaac_so_arm101.devices.so101 import require_so101_bus
+
+        with patch("isaac_so_arm101.devices.so101.read_feetech_bus_probe", return_value=pingti):
+            with self.assertRaises(SystemExit) as caught:
+                require_so101_bus("/dev/ttyACM0")
+        self.assertIn("this is the PingTi bus", str(caught.exception))
 
     def test_live_serial_skipped_without_env(self):
         pingti_port = os.environ.get("ISAAC_SO_ARM101_PINGTI_PORT")
